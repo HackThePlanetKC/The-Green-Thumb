@@ -37,7 +37,8 @@ Units: imperial (°F, foot-candles).
   dht11.py                  # done
   soil_moisture.py          # done
   light_sensor.py           # done (LDR, placeholder calibration - see open items)
-  display.py                # not yet written
+  display.py                # done (screen cycling, night mode, dynamic screen list)
+  icons.py                  # done (16x16 monochrome bitmap icons: temp, droplet, sun, health, wifi, module)
   status_led.py             # not yet written
   button.py                 # not yet written
 /core/
@@ -63,13 +64,15 @@ Units: imperial (°F, foot-candles).
 - Local sensor sampling: every 2 min
 - MQTT state publish: every 30 min default, runtime-adjustable via command
 - Interrupt publish: immediate, only on transition to red health status
-- Display auto-cycle resumes 20s after a manual button press
+- Display auto-cycle: every 10s, resumes 20s after a manual button press
+- Display night mode: configurable time range (default 22:00-07:00), display off outside manual wake; a button press during night mode wakes to that screen for 20s (same idle timer as normal), then re-sleeps
 
 **MQTT topic tree:**
 ```
 greenthumb/<base_id>/status                      (LWT, retained)
 greenthumb/<base_id>/state                        (JSON, retained)
 greenthumb/<base_id>/health                       (JSON, retained)
+greenthumb/<base_id>/config                       (JSON, retained - full current user-configurable settings, republished after every change)
 greenthumb/<base_id>/command                      (JSON, not retained)
 greenthumb/<base_id>/light_summary                (JSON, retained, published daily at midnight)
 greenthumb/<base_id>/calibration/command
@@ -81,6 +84,16 @@ greenthumb/<base_id>/module/<mod_id>/state
 greenthumb/<base_id>/module/<mod_id>/command
 ```
 QoS 1 everywhere. `<base_id>`/`<mod_id>` derived from MAC address.
+
+**HA-visible/writable configuration:** every user-configurable setting (thresholds, calibration values, timing, display/night-mode) is readable via the retained `config` topic and writable via a single generic command:
+```json
+{"action": "set_config", "path": "thresholds.temp_f.green_min", "value": 66}
+```
+`path` uses dot notation into the config schema (see `core/config.py`'s `get_by_path`/`set_by_path`). An invalid or typo'd path is rejected (`KeyError`) rather than silently ignored or creating a new key. This replaces per-setting bespoke commands (earlier drafts had `set_interval`, `set_night_mode` individually) with one mechanism that covers the whole schema.
+
+**Explicitly excluded from HA-visible config:** WiFi credentials and MQTT broker address/credentials. The device can't receive MQTT commands before it already has WiFi and a broker connection, so exposing those over MQTT is circular, and broker credentials shouldn't travel over MQTT regardless. These stay in the initial-setup web portal flow only.
+
+**Open item:** what happens on an invalid `set_config` path or value (reject silently, publish an error somewhere, echo failure in the `config` topic) isn't decided yet - to be settled when `core/mqtt_client.py`'s command handler is built.
 
 **Health thresholds** (user-configurable per plant profile, generic houseplant defaults shown):
 
@@ -98,6 +111,24 @@ QoS 1 everywhere. `<base_id>`/`<mod_id>` derived from MAC address.
 - `light_hours_target`: 12-16h/day (sourced)
 - `high_intensity_hours` (sunburn risk tracking): schema in place but inert - blocked on `light_fc.red_max`
 - Evaluated once daily at midnight rollover (NTP), not live - status reflects "yesterday"
+
+**Display screens:** confirmed core order, each with a 16x16 monochrome bitmap icon (`drivers/icons.py`), rendered via `Display.draw_screen(icon_bytes, title, lines)`:
+
+| # | Screen | Icon |
+|---|---|---|
+| 1 | Temp + Humidity | Thermometer |
+| 2 | Soil Moisture % | Droplet |
+| 3 | Light (fc) | Sun |
+| 4 | Overall health status | Heart |
+| 5 | WiFi/MQTT connection + IP | WiFi arcs |
+
+**Extensible module screens:** `Display.add_screen(screen_id, render_fn)` / `remove_screen(screen_id)` let future BLE modules insert their own screen when they pair and remove it when they unpair, without `display.py` or `main.py` knowing about module types in advance. `draw_screen()` is the standard format any module's render_fn should target - an icon (use `icons.ICON_MODULE` as a generic fallback if the module has no custom icon), a title, and up to 5 lines of body text. `display.py` has no built-in knowledge of any module's payload shape; `module_manager.py` (not yet written) supplies the actual per-module-type render function when a module pairs. Whether module screens carry their own custom icon or always use the generic gear fallback is not yet decided - deferred until the first real module (watering pump) is built.
+
+**Display night mode:** optional (`display.night_mode.enabled`, default on but fully user-toggleable), runtime-adjustable from Home Assistant via the generic `set_config` command, e.g.:
+```json
+{"action": "set_config", "path": "display.night_mode.enabled", "value": false}
+```
+`display.night_mode.led_off` additionally suppresses the WS2812 status LED during the night-mode window once `status_led.py` is built (not yet written). Whether an urgent red-health-status LED should override `led_off` is not yet decided - to be settled when `status_led.py` is designed.
 
 **BLE pairing flow:** triggered by button long-press (3s) OR remote MQTT command. 60s scan window, blinking blue LED. Explicit user confirmation required even with only one candidate found (avoids accidentally pairing a neighbor's device).
 

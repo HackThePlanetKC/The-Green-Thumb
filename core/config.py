@@ -29,8 +29,17 @@ DEFAULT_CONFIG = {
     "timing": {
         "sample_interval_s": 120,          # local sensor sampling: 2 min
         "publish_interval_s": 1800,        # MQTT state publish: 30 min default, adjustable at runtime
-        "display_resume_idle_s": 20,       # auto-cycle resumes 20s after a manual button press
         "pairing_timeout_s": 60,           # BLE pairing scan window
+    },
+    "display": {
+        "auto_cycle_interval_s": 10,       # time between automatic screen advances
+        "resume_idle_s": 20,               # auto-cycle resumes 20s after a manual button press
+        "night_mode": {
+            "enabled": True,
+            "start_hour": 22, "start_minute": 0,   # 24hr, local time (requires NTP sync)
+            "end_hour": 7, "end_minute": 0,
+            "led_off": False,   # also disable the WS2812 status LED during night mode - consumed by status_led.py (not yet written)
+        },
     },
     "thresholds": {
         "temp_f": {
@@ -106,6 +115,46 @@ def load():
 def save(config):
     """Persist config to flash. Returns True/False - see storage.write_json."""
     return storage.write_json(CONFIG_PATH, config)
+
+
+def get_by_path(config, path):
+    """
+    Reads a nested config value using dot notation, e.g.
+    get_by_path(cfg, "thresholds.temp_f.green_min").
+
+    Raises KeyError if any part of the path doesn't exist in the schema.
+    Used by the generic MQTT set_config command handler (core/mqtt_client.py,
+    not yet written) to validate paths before touching anything - an
+    invalid/typo'd path should error, not silently no-op or create a new key.
+    """
+    node = config
+    for key in path.split("."):
+        if not isinstance(node, dict) or key not in node:
+            raise KeyError(path)
+        node = node[key]
+    return node
+
+
+def set_by_path(config, path, value):
+    """
+    Writes a nested config value using dot notation. Raises KeyError if
+    the path (including the final key) doesn't already exist - this
+    never creates new keys, only updates existing ones, so a malformed
+    MQTT command can't silently inject arbitrary config structure.
+
+    Does not save to flash - caller is responsible for calling save()
+    after, so multiple set_by_path calls can be batched into one write.
+    """
+    keys = path.split(".")
+    node = config
+    for key in keys[:-1]:
+        if not isinstance(node, dict) or key not in node:
+            raise KeyError(path)
+        node = node[key]
+    last_key = keys[-1]
+    if not isinstance(node, dict) or last_key not in node:
+        raise KeyError(path)
+    node[last_key] = value
 
 
 def _copy(d):

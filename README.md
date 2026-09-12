@@ -65,7 +65,7 @@ All core design decisions — MQTT topic structure, health-threshold logic, cali
 - [x] `drivers/light_sensor.py` — LDR light level (placeholder calibration pending a lux reference)
 
 ### In progress / up next
-- [ ] `drivers/display.py` — OLED screen cycling
+- [x] `drivers/display.py` — OLED screen cycling + night mode
 - [ ] `drivers/status_led.py` — WS2812 health colors + pairing indicator
 - [ ] `drivers/button.py` — short/long press handling
 - [ ] `core/wifi.py`, `core/ntp.py` — connectivity & time sync
