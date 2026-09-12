@@ -1,120 +1,94 @@
-# Green Thumb
+# 🌱 Green Thumb
 
-Self-contained indoor plant growth helper. ESP32-C3 Super Mini base board, MicroPython firmware, MQTT to a Home Assistant Mosquitto broker via custom HACS integration. Expandable via BLE-connected peripheral modules.
+A self-contained, expandable indoor plant growth helper built around an ESP32-C3, with full Home Assistant integration and a standalone web portal for everyone else.
 
-## Hardware (base board)
+Green Thumb monitors temperature, humidity, soil moisture, and light — cycles the data on a small OLED display, reflects overall plant health through an RGB status LED, and reports everything to Home Assistant over MQTT via a custom HACS integration. No HA? A lightweight web portal served directly from the device covers the same ground.
 
-- ESP32-C3 Super Mini
-- DHT11 (temp/humidity)
-- Analog capacitive soil moisture sensor v1.2
-- Photoresistor (LDR) light sensor - planned swap to BH1750 I2C lux sensor
-- SSD1306 128x64 OLED display (I2C)
-- WS2812 addressable RGB LED (status/health color, pairing indicator)
-- Physical pushbutton (short press: cycle display / long press 3s: BLE pairing mode)
+The base station is intentionally minimal — sensors and reporting only. Actuation (watering, grow lighting, and more) is handled by separate, purpose-built modules that pair to the base wirelessly over Bluetooth Low Energy, so the system grows without the base board ever needing a redesign.
 
-Units: imperial (°F, foot-candles).
+## Open source & community
 
-## Architecture
+Green Thumb is fully open source and built for the hacker/maker community. The full base station firmware, MQTT/BLE architecture, and (eventually) the HACS integration and module firmware are all published here — clone it, modify it, build your own modules, adapt it to hardware you already have on hand.
 
-- Firmware: MicroPython, asyncio-based task loop
-- Base board is the sole WiFi/MQTT/HA gateway - modules never connect to WiFi or HA directly
-- Base acts as BLE central; future modules (pump, grow light, NPK sensor) are BLE peripherals
-- HA integration: custom HACS component (not ESPHome, not generic MQTT discovery)
-- Fallback: lightweight web portal served from the ESP32 for non-HA users, using the same internal command state machines as the HACS integration (no duplicate logic paths)
+**Licensing note:** this project is released under CC BY-NC-SA 4.0 — free to use, modify, and share for noncommercial purposes with attribution. Commercial use (including selling assembled boards, kits, or modules built from this design) is reserved to the project maintainer. See [`LICENSE.md`](LICENSE.md).
 
-## Repo layout
+**Fully assembled modules are planned for sale** directly from the maintainer once the base station and first BLE modules (starting with watering) are stable — for people who want the hardware without soldering it themselves. The design stays open regardless; buying an assembled unit is a convenience, not a requirement.
+
+Contributions, issues, and forks are welcome. If you build a module, open a PR — the BLE GATT schema is designed specifically so third-party modules can be added without changing base firmware.
+
+## Why
+
+Most plant monitors either dump raw numbers with no interpretation, or lock you into a single cloud app. Green Thumb is local-first: your data lives in your Home Assistant instance (or on the device itself), thresholds are yours to configure per plant, and the hardware is designed to expand — a pump module, a grow light module, an NPK sensor — without replacing what you already built.
+
+## Hardware (base station)
+
+| Component | Purpose |
+|---|---|
+| ESP32-C3 Super Mini | Main controller — WiFi/MQTT gateway, BLE central |
+| DHT11 | Temperature & humidity |
+| Capacitive soil moisture sensor v1.2 | Soil moisture (calibrated per-sensor) |
+| Photoresistor (LDR) | Light level — planned upgrade path to BH1750 digital lux sensor |
+| SSD1306 128×64 OLED | Cycles through live sensor readings |
+| WS2812 addressable RGB LED | Plant health at a glance (green / yellow / red), BLE pairing indicator |
+| Pushbutton | Short press: cycle display · Long press: enter BLE pairing mode |
+
+Units throughout: °F and foot-candles.
+
+## How it fits together
 
 ```
-/boot.py                  # minimal, runs before main (not yet written)
-/main.py                  # entry point, starts asyncio tasks (not yet written)
-/lib/                      # vendored third-party libraries (not yet added)
-  ssd1306.py                # display driver
-  umqtt/robust.py           # MQTT client (auto-reconnect)
-  aioble/                   # async BLE library
-/drivers/
-  dht11.py                  # done
-  soil_moisture.py          # not yet written
-  light_sensor.py           # not yet written
-  display.py                # not yet written
-  status_led.py             # not yet written
-  button.py                 # not yet written
-/core/
-  storage.py                # done - atomic flash read/write helpers
-  config.py                 # done - config schema, defaults, load/save
-  wifi.py                   # not yet written
-  ntp.py                    # not yet written
-  mqtt_client.py             # not yet written
-  health.py                  # not yet written
-  light_tracker.py           # not yet written
-  calibration.py             # not yet written
-  pairing.py                 # not yet written
-  ble_central.py              # not yet written
-  module_manager.py           # not yet written
-/web/
-  server.py                   # not yet written
-  static/                     # not yet written
+┌─────────────────────┐         MQTT / WiFi         ┌──────────────────┐
+│   Green Thumb Base   │ ───────────────────────────▶│  Home Assistant   │
+│  (sensors, display,  │                              │  (Mosquitto +     │
+│   status LED, gateway)│                              │   custom HACS     │
+│                      │◀──── BLE (central) ─────┐    │   integration)    │
+└─────────────────────┘                          │    └──────────────────┘
+                                                   │
+                              ┌────────────────────┴───────────────────┐
+                              │        Future BLE peripheral modules     │
+                              │   watering pump · grow light · NPK sensor │
+                              └───────────────────────────────────────────┘
 ```
 
-## Key design decisions
+Modules never touch WiFi or Home Assistant directly — the base is the only gateway. This keeps the network surface small and means a module can be designed, built, and paired without ever modifying base firmware.
 
-**Timing:**
-- Local sensor sampling: every 2 min
-- MQTT state publish: every 30 min default, runtime-adjustable via command
-- Interrupt publish: immediate, only on transition to red health status
-- Display auto-cycle resumes 20s after a manual button press
+## Status: early build, architecture complete
 
-**MQTT topic tree:**
-```
-greenthumb/<base_id>/status                      (LWT, retained)
-greenthumb/<base_id>/state                        (JSON, retained)
-greenthumb/<base_id>/health                       (JSON, retained)
-greenthumb/<base_id>/command                      (JSON, not retained)
-greenthumb/<base_id>/light_summary                (JSON, retained, published daily at midnight)
-greenthumb/<base_id>/calibration/command
-greenthumb/<base_id>/calibration/status           (retained)
-greenthumb/<base_id>/pairing/command
-greenthumb/<base_id>/pairing/status               (retained)
-greenthumb/<base_id>/module/<mod_id>/status
-greenthumb/<base_id>/module/<mod_id>/state
-greenthumb/<base_id>/module/<mod_id>/command
-```
-QoS 1 everywhere. `<base_id>`/`<mod_id>` derived from MAC address.
+All core design decisions — MQTT topic structure, health-threshold logic, calibration flows, BLE pairing and GATT schema — are finalized. Firmware implementation is in progress, driver-by-driver. Full technical detail: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
-**Health thresholds** (user-configurable per plant profile, generic houseplant defaults shown):
+### Done
+- [x] Full architecture spec (MQTT topics, timing, thresholds, calibration & pairing state machines, BLE GATT schema)
+- [x] `core/storage.py` — atomic flash read/write
+- [x] `core/config.py` — config schema, defaults, load/save with forward-compatible merging
+- [x] `drivers/dht11.py` — temperature/humidity
+- [x] `drivers/soil_moisture.py` — soil moisture with two-point calibration
+- [x] `drivers/light_sensor.py` — LDR light level (placeholder calibration pending a lux reference)
 
-| Metric | Green | Red | Source |
-|---|---|---|---|
-| Temperature | 65-75°F | <50°F or >90°F | Sourced (chilling injury / heat stress references) |
-| Humidity | 40-60% | <20% or >80% | Sourced |
-| Light | 200-500 fc | **unset - see open items** | Green range sourced; red thresholds not yet sourced |
-| Soil moisture | 20-40% | <10% or >50% | User-specified |
+### In progress / up next
+- [ ] `drivers/display.py` — OLED screen cycling
+- [ ] `drivers/status_led.py` — WS2812 health colors + pairing indicator
+- [ ] `drivers/button.py` — short/long press handling
+- [ ] `core/wifi.py`, `core/ntp.py` — connectivity & time sync
+- [ ] `core/mqtt_client.py` — topic builder, pub/sub wrapper, LWT
+- [ ] `core/health.py` — green/yellow/red calculation
+- [ ] `core/light_tracker.py` — daily light-hours accumulator
+- [ ] `core/calibration.py` — soil/light calibration state machine
+- [ ] `core/pairing.py`, `core/ble_central.py`, `core/module_manager.py` — BLE module support
+- [ ] `main.py` / `boot.py` — asyncio task orchestration
+- [ ] `web/` — standalone portal for non-HA users
+- [ ] Custom HACS integration (separate repo/component)
+- [ ] First BLE peripheral module: watering pump
+- [ ] GPIO pin map finalization
+- [ ] Light sensor real-world calibration (needs a lux reference)
+- [ ] High-intensity/sunburn light thresholds (`light_fc.red_min`/`red_max`) — no sourced data yet
 
-**Soil moisture calibration:** MQTT-driven state machine (`start` -> `read_dry` -> `read_wet` -> `save`/`cancel`), 10 samples averaged over ~2s per read. Shared between web portal and HACS integration - one state machine, two entry points. Moisture % computed via min/max of the two calibrated raw readings (sensor polarity not assumed).
+## Design principles
 
-**Light duration tracking:** separate from instantaneous fc reading.
-- `light_present_threshold_fc`: 75 (sourced - "just enough daylight to read by")
-- `light_hours_target`: 12-16h/day (sourced)
-- `high_intensity_hours` (sunburn risk tracking): schema in place but inert - blocked on `light_fc.red_max`
-- Evaluated once daily at midnight rollover (NTP), not live - status reflects "yesterday"
+- **Local-first.** Home Assistant + Mosquitto is the primary integration path; the device works without any cloud dependency.
+- **Spec before code.** Every subsystem — MQTT schema, calibration, pairing — was fully designed before implementation started.
+- **No guessed thresholds.** Health ranges are either sourced from horticultural references or explicitly left unset rather than filled with a plausible-looking placeholder.
+- **The base never redesigns.** New capabilities arrive as BLE modules, not base firmware rewrites.
 
-**BLE pairing flow:** triggered by button long-press (3s) OR remote MQTT command. 60s scan window, blinking blue LED. Explicit user confirmation required even with only one candidate found (avoids accidentally pairing a neighbor's device).
+## License
 
-**BLE GATT schema** (module side):
-```
-Service: a1e50000-b5a3-4393-b673-5d2a1d3d0001
-├── Device Type      (...0002) Read
-├── Module Serial     (...0003) Read
-├── State              (...0004) Read, Notify   - mirrors MQTT module/state JSON shape
-├── Command            (...0005) Write           - mirrors MQTT module/command JSON shape
-└── Firmware Version   (...0006) Read
-```
-MTU negotiation attempted at connect; falls back to chunked fragments (header byte = sequence number, 0xFF = final) if negotiation fails.
-
-**Board choice:** ESP32-C3 Super Mini, confirmed after comparing against Pico W/2W (BLE+WiFi share a bus to an external co-processor chip - more contention risk), Pi Zero W/2W (full Linux, would require abandoning the MicroPython architecture), Wemos D1 Mini (ESP8266, no BLE at all), and ESP32-S3/original ESP32 (dual-core alternatives at similar price - would reduce CPU-level WiFi/BLE contention, but user has C3 units on hand already).
-
-## Open items
-
-- `light_fc.red_min` / `light_fc.red_max` (sunburn/high-intensity thresholds) - **unset, no sourced data yet**. Blocks `high_intensity_hours` tracking from having any real effect.
-- Pump and grow light removed from base board scope entirely - deferred to a future BLE-connected watering/lighting module.
-- Sensor loop failure-escalation policy not yet decided (e.g. what happens after N consecutive DHT11 read failures).
-- GPIO pin map not yet finalized across all sensors/peripherals.
+CC BY-NC-SA 4.0 — see [`LICENSE.md`](LICENSE.md). Commercial use reserved to the maintainer.

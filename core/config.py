@@ -58,7 +58,19 @@ DEFAULT_CONFIG = {
     "soil_calibration": {
         "dry_raw": None,
         "wet_raw": None,
-        "min_delta_raw": 200,  # placeholder, ~5% of 12-bit ADC range - retune once sensor datasheet is known
+        # Raw values here are on the machine.ADC.read_u16() scale (0-65535,
+        # portable across MicroPython ports), not raw 12-bit ADC counts.
+        "min_delta_raw": 3277,  # placeholder, ~5% of 0-65535 range - retune once sensor datasheet is known
+    },
+    "light_calibration": {
+        # Placeholder values only - not real measurements. The UI should
+        # prompt for calibration during initial device setup. Do not
+        # trust these values based on their presence alone; check
+        # `calibrated` explicitly (see drivers/light_sensor.py).
+        "dark_raw": 0,
+        "bright_raw": 65535,
+        "bright_fc": 500,
+        "calibrated": False,
     },
     "profile_name": "generic_houseplant",
 }
