@@ -69,9 +69,9 @@ All core design decisions — MQTT topic structure, health-threshold logic, cali
 - [x] `drivers/status_led.py` — WS2812 health colors + pairing indicator
 - [x] `drivers/button.py` — short/long press handling
 - [x] `core/wifi.py`, `core/identity.py` — connectivity & base_id derivation
-- [ ] `core/ntp.py` — time sync
-- [ ] `core/mqtt_client.py` — topic builder, pub/sub wrapper, LWT
-- [ ] `core/health.py` — green/yellow/red calculation
+- [x] `core/ntp.py` — time sync
+- [x] `core/mqtt_client.py` — topic builder, pub/sub wrapper, LWT
+- [x] `core/health.py` — green/yellow/red calculation
 - [ ] `core/light_tracker.py` — daily light-hours accumulator
 - [ ] `core/calibration.py` — soil/light calibration state machine
 - [ ] `core/pairing.py`, `core/ble_central.py`, `core/module_manager.py` — BLE module support
@@ -82,6 +82,8 @@ All core design decisions — MQTT topic structure, health-threshold logic, cali
 - [ ] GPIO pin map finalization
 - [ ] Light sensor real-world calibration (needs a lux reference)
 - [ ] High-intensity/sunburn light thresholds (`light_fc.red_min`/`red_max`) — no sourced data yet
+- [ ] Idle animations and user-selectable color options for the status LED — deferred, decide later
+- [ ] Additional button press combinations, or a second physical button — deferred, decide later
 
 ## Design principles
 

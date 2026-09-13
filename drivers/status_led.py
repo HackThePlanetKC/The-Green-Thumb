@@ -1,6 +1,24 @@
 """
 drivers/status_led.py - WS2812 (single pixel) status LED wrapper.
 
+Boot animation plays automatically from construction until set_health()
+is first called with real data - see _render_boot_animation. This is
+the answer to "what does the LED show before any sensor data exists":
+rather than inventing a 4th health color for "unknown", there's a
+dedicated startup sequence: a brief warm-to-cool "sunrise" brightness
+ramp (the actual boot animation, fixed 3s), followed by breathing green
+(a general standby indicator - "still initializing, not ready yet" -
+not just a boot-specific animation; it continues for as long as needed
+until real health data arrives, however long that takes).
+
+Priority: the sunrise is fully protected - nothing interrupts it. Once
+breathing green begins, there's a further 5s grace window where it's
+still protected. Only after that (sunrise + 5s = 8s total) can pairing
+or WiFi-connecting preempt the still-ongoing breathing green - and if
+those clear before set_health() is ever called, breathing green resumes
+underneath them, since the device is still "booting" the whole time.
+Night-mode suppression never applies to any of this, at any point.
+
 Health status is shown as a solid color (green/yellow/red). If red
 persists continuously for longer than `red_escalation_delay_s`, the LED
 switches from solid to blinking red and an `on_escalation_change`
@@ -47,6 +65,15 @@ COLORS = {
     "off": (0, 0, 0),
 }
 
+# Boot animation reference colors - approximate blackbody swatches, not a
+# precise CCT formula (WS2812 has no dedicated white channel anyway, so
+# exact color-science accuracy isn't achievable or necessary here).
+_BOOT_WARM_RGB = (255, 147, 41)    # ~2000K warm white approximation
+_BOOT_COOL_RGB = (243, 242, 255)   # ~7000K cool white approximation
+_BOOT_SUNRISE_MS = 3000            # phase 1 duration
+_BOOT_GREEN_GRACE_MS = 5000        # additional grace after green starts before pairing/wifi can preempt
+_BOOT_MAX_LEVEL = 0.30             # phase 1 brightness ramps 0 -> 30% of configured brightness
+
 
 class StatusLed:
     def __init__(
@@ -71,13 +98,19 @@ class StatusLed:
         self._blink_on = False
         self._last_blink_toggle_ms = 0
 
+        # Boot animation: plays from construction until set_health() is
+        # first called with real data. See module docstring.
+        self._booting = True
+        self._boot_start_ms = time.ticks_ms()
+
     def set_health(self, status):
         """
         status: "green", "yellow", or "red". Call whenever health.py
-        recomputes overall status. Tracks how long red has been
-        continuously active so tick() can compute escalation - a status
-        change away from red resets the timer and de-escalates.
+        recomputes overall status. The first call ends the boot
+        animation, regardless of which status is passed - main.py should
+        simply not call this until it has a real reading to report.
         """
+        self._booting = False
         if status == self._health_status:
             return
         if status == "red":
@@ -115,6 +148,19 @@ class StatusLed:
         display (respects night mode, with the escalated-red exception).
         """
         now = time.ticks_ms()
+
+        if self._booting:
+            elapsed = time.ticks_diff(now, self._boot_start_ms)
+            protected = elapsed < (_BOOT_SUNRISE_MS + _BOOT_GREEN_GRACE_MS)
+            if protected or not (self._pairing_active or self._wifi_connecting):
+                self._render_boot_animation(now)
+                return
+            # Past the protected window AND pairing/wifi is active - fall
+            # through to normal priority handling below, which renders
+            # whichever of those is active. Booting itself is unaffected
+            # (still True) - once pairing/wifi clear, later tick() calls
+            # land back in the branch above and resume breathing green,
+            # since the device is still "booting" until set_health() fires.
 
         if self._health_status == "red" and self._red_since_ms is not None and not self._escalated:
             elapsed_s = time.ticks_diff(now, self._red_since_ms) / 1000
@@ -166,6 +212,30 @@ class StatusLed:
         scaled = tuple(int(c * self._brightness * level) for c in color)
         self._np[0] = scaled
         self._np.write()
+
+    def _render_boot_animation(self, now):
+        """
+        Phase 1 (0-3s): linear brightness ramp 0->30% of configured
+        brightness, color blends warm->cool white (see module docstring
+        on why this is an approximation, not a precise CCT formula).
+        Phase 2 (3s onward): breathing green - the general "still
+        initializing" standby indicator, not just a boot-specific tail
+        end. Continues indefinitely until set_health() is first called,
+        however long that takes.
+        """
+        elapsed = time.ticks_diff(now, self._boot_start_ms)
+        if elapsed < _BOOT_SUNRISE_MS:
+            progress = max(0, min(1, elapsed / _BOOT_SUNRISE_MS))
+            level = _BOOT_MAX_LEVEL * progress
+            color = tuple(
+                _BOOT_WARM_RGB[i] + (_BOOT_COOL_RGB[i] - _BOOT_WARM_RGB[i]) * progress
+                for i in range(3)
+            )
+            scaled = tuple(int(c * self._brightness * level) for c in color)
+            self._np[0] = scaled
+            self._np.write()
+        else:
+            self._render_breathing(COLORS["green"], now)
 
     def _set_color(self, rgb):
         scaled = tuple(int(c * self._brightness) for c in rgb)

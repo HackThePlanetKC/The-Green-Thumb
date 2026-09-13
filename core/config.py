@@ -47,6 +47,15 @@ DEFAULT_CONFIG = {
         "blink_interval_ms": 500,
         "red_escalation_delay_s": 3600,   # how long red must persist before escalating to blinking + requires_immediate_attention flag. UX choice, not a sourced threshold - starting default, tune to preference
     },
+    "timezone": {
+        # Fixed UTC offset in hours (supports fractional, e.g. 5.5 for India).
+        # MUST be set correctly by the user - MicroPython's NTP sync has no
+        # timezone/DST database, so this is the only source of truth for
+        # local time (used by night mode and daily light-hours rollover).
+        # No automatic DST: if your region observes it, update this
+        # manually twice a year.
+        "utc_offset_hours": 0,
+    },
     "thresholds": {
         "temp_f": {
             "green_min": 65, "green_max": 75,

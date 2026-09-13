@@ -31,7 +31,7 @@ Units: imperial (°F, foot-candles).
 /main.py                  # entry point, starts asyncio tasks (not yet written)
 /lib/                      # vendored third-party libraries (not yet added)
   ssd1306.py                # display driver
-  umqtt/robust.py           # MQTT client (auto-reconnect)
+  umqtt/simple.py            # MQTT client (see mqtt_client.py note below on why umqtt.simple, not umqtt.robust)
   aioble/                   # async BLE library
 /drivers/
   dht11.py                  # done
@@ -39,16 +39,16 @@ Units: imperial (°F, foot-candles).
   light_sensor.py           # done (LDR, placeholder calibration - see open items)
   display.py                # done (screen cycling, night mode, dynamic screen list)
   icons.py                  # done (16x16 monochrome bitmap icons: temp, droplet, sun, health, wifi, module)
-  status_led.py             # done (health colors, red escalation to blinking, pairing indicator, night mode interaction)
+  status_led.py             # done (health colors, red escalation to blinking, pairing indicator, boot animation, night mode interaction)
   button.py                 # done (short/long/very-long press, debounce, dead zone)
 /core/
   storage.py                # done - atomic flash read/write helpers
   config.py                 # done - config schema, defaults, load/save
   identity.py                # done (base_id derived from WiFi MAC, shared by wifi.py and future mqtt_client.py)
   wifi.py                   # done (async STA connect/retry, open AP fallback for setup)
-  ntp.py                    # not yet written
-  mqtt_client.py             # not yet written
-  health.py                  # not yet written
+  ntp.py                    # done (fixed UTC offset, no DST - see below)
+  mqtt_client.py             # done (topic builder, publish/subscribe, LWT, generic set_config handler)
+  health.py                  # done (per-metric + overall status calculation)
   light_tracker.py           # not yet written
   calibration.py             # not yet written
   pairing.py                 # not yet written
@@ -94,7 +94,11 @@ QoS 1 everywhere. `<base_id>`/`<mod_id>` derived from MAC address.
 
 **Explicitly excluded from HA-visible config:** WiFi credentials and MQTT broker address/credentials. The device can't receive MQTT commands before it already has WiFi and a broker connection, so exposing those over MQTT is circular, and broker credentials shouldn't travel over MQTT regardless. These stay in the initial-setup web portal flow only.
 
-**Open item:** what happens on an invalid `set_config` path or value (reject silently, publish an error somewhere, echo failure in the `config` topic) isn't decided yet - to be settled when `core/mqtt_client.py`'s command handler is built.
+**Open item resolved:** an invalid `set_config` path or value is rejected silently by `mqtt_client.py` - no ack/error topic exists anywhere in this design, so the retained `config` topic simply not changing is the implicit signal back to HA that the write didn't take.
+
+**MQTT client library: umqtt.simple, not umqtt.robust (deviation from earlier plan).** `umqtt.robust` was the originally vendored choice for its automatic reconnect. On closer inspection, its reconnect works by catching `OSError` and **blocking in an internal retry loop** until the broker comes back - which would stall the entire asyncio event loop (display, sensors, BLE) during a broker outage. That's inconsistent with `wifi.py` and `ntp.py`, both of which deliberately built their own async, non-blocking connect/backoff logic rather than trusting a library's blocking retry. `mqtt_client.py` does the same: plain `umqtt.simple`, with its own `reconnect_forever()` task handling backoff asynchronously (1s, 2s, 4s... capped at 60s, same pattern as the other two). `check_msg()` (umqtt.simple's non-blocking poll variant, not the blocking `wait_msg()`) is polled every 200ms from `listen_forever()`. Individual `connect()`/`publish()` calls remain blocking under the hood, but are short (small JSON payloads on a local network) - the same accepted tradeoff already made in `wifi.py`'s `connect_sta()` and `ntp.py`'s `sync_once()`.
+
+**mqtt_client.py responsibilities:** topic construction (`greenthumb/<base_id>/...`), LWT setup (`status` topic, "offline", retained, set before `connect()`), publish helpers matching every topic in the tree above (`publish_state`, `publish_health`, `publish_config`, `publish_light_summary`, `publish_calibration_status`, `publish_pairing_status`, `publish_module_state`, `publish_module_status` - all QoS 1, retained where specified), and command dispatch: `set_config` is handled directly against the live config dict (shared by reference with the rest of the firmware, so a change is visible everywhere immediately); all other command actions are handed off via callbacks (`on_command`, `on_calibration_command`, `on_pairing_command`, `on_module_command`) to whichever module actually owns that logic (`health.py`, `calibration.py`, `pairing.py`, `module_manager.py` - none written yet).
 
 **Health thresholds** (user-configurable per plant profile, generic houseplant defaults shown):
 
@@ -129,7 +133,11 @@ QoS 1 everywhere. `<base_id>`/`<mod_id>` derived from MAC address.
 ```json
 {"action": "set_config", "path": "display.night_mode.enabled", "value": false}
 ```
-**Status LED (`status_led.py`):** single WS2812, diffused under a thin printed section of the enclosure (a 3D-printed near-life-size fist/thumbs-up; LED sits under the thumbnail, display sits on the middle finger's face). Solid green/yellow/red for health status. If red persists continuously past a configurable delay (`status_led.red_escalation_delay_s`, default 3600s - a UX choice, not a sourced threshold), the LED switches from solid to **blinking** red and fires a `requires_immediate_attention` flag, added to the `health` MQTT payload:
+**Status LED (`status_led.py`):** single WS2812, diffused under a thin printed section of the enclosure (a 3D-printed near-life-size fist/thumbs-up; LED sits under the thumbnail, display sits on the middle finger's face).
+
+**Boot animation:** plays automatically from power-on until `set_health()` is first called with real data. Rather than inventing a 4th "unknown" health color, there's a dedicated startup sequence: a 3-second warm-to-cool white "sunrise" (linear brightness ramp 0-30% of configured brightness, RGB blended between ~2000K `(255,147,41)` and ~7000K `(243,242,255)` reference approximations - not a precise CCT formula, since WS2812 has no dedicated white channel anyway), followed by breathing green - a general "still initializing, not ready yet" standby indicator, not just a boot-specific tail end, continuing for as long as needed. Priority: the sunrise (0-3s) is fully protected from interruption. Breathing green gets a further 5s grace window (3-8s total) where it's also protected. Only after that (8s total) can pairing or WiFi-connecting preempt the still-ongoing breathing green - and if those clear before `set_health()` is ever called, breathing green resumes underneath them, since the device is still "booting" the whole time. Night-mode suppression never applies to any part of this, at any point.
+
+Solid green/yellow/red for health status. If red persists continuously past a configurable delay (`status_led.red_escalation_delay_s`, default 3600s - a UX choice, not a sourced threshold), the LED switches from solid to **blinking** red and fires a `requires_immediate_attention` flag, added to the `health` MQTT payload:
 ```json
 {
   "status": "red",
@@ -139,7 +147,9 @@ QoS 1 everywhere. `<base_id>`/`<mod_id>` derived from MAC address.
 ```
 This flag flip (either direction) also triggers an immediate out-of-cycle publish, same as the original red-transition rule. Pairing mode (blinking blue) overrides the health display entirely while active, and always bypasses night-mode suppression - it's a deliberate action the user just triggered. WiFi connecting/reconnecting shows as **breathing purple** (smooth sine-based brightness ramp, not a hard blink) - unlike pairing, this respects night-mode suppression, since a reconnect can happen unattended at any hour and there's no reason to light up a dark room over something the user didn't initiate. Night mode's `led_off` suppresses the LED, but **only the escalated/blinking red tier** can override that suppression, and only if `display.night_mode.red_overrides_led_off` is enabled (default off) - plain solid red never overrides night mode, and neither does the breathing-purple WiFi state. `status_led.brightness` (default 0.15, a 0.0-1.0 scalar) is a placeholder pending real tuning once the physical diffused enclosure exists.
 
-Priority order in `tick()`: pairing > WiFi connecting > health display.
+Priority order in `tick()`: boot animation > pairing > WiFi connecting > health display.
+
+**Health calculation (`health.py`):** pure function, `evaluate_health(readings, thresholds_cfg)` -> `{"status": ..., "reasons": [...]}`. Overall status is the worst of all evaluated metrics (red > yellow > green). A metric with a `None` reading (sensor unavailable or uncalibrated) is excluded from aggregation entirely - never counted as green, since a missing reading isn't a good reading. If literally every metric is `None`, overall status is `None` too, a distinct case from boot (which never calls into this module at all - see status_led.py's boot animation above) or from a single metric being unavailable. This module makes no publish or LED decisions itself; it only computes.
 
 `display.night_mode.led_off` additionally suppresses the WS2812 status LED during the night-mode window - see above for the full escalation/override interaction.
 
@@ -148,6 +158,8 @@ Priority order in `tick()`: pairing > WiFi connecting > health display.
 **WiFi (`wifi.py` + `identity.py`):** async STA connection (never blocks other tasks during connect attempts). On failure, caller applies capped exponential backoff (`next_backoff_s()`: 1s, 2s, 4s... capped at 60s) between retries. A dropped connection after initial success keeps retrying STA in the background rather than falling back to AP - sensors/display/BLE keep working without WiFi; only MQTT/HA connectivity degrades until reconnect. AP (setup) mode is an **open network** (no password, simplest for initial setup), SSID `GreenThumb-Setup-<base_id>`, entered automatically if no credentials are saved at boot. AP+STA run concurrently (ESP32 supports both simultaneously), so entering setup mode doesn't interrupt an existing connection. `base_id` (used here and in the MQTT topic tree) is the last 3 bytes of the WiFi MAC, uppercase hex - `core/identity.py`, shared by both.
 
 **Re-entering setup mode: boot-hold, not a runtime press.** `wifi.check_setup_hold_at_boot(pin_num, hold_s=3)` is a blocking, one-shot check called from `main.py`'s startup sequence before the asyncio event loop starts - if the button is already held down at power-on and stays held for the full duration, the device boots into setup/AP mode instead of normal operation. This is intentionally separate from `button.py`'s runtime press detection: a runtime long-press (however long the threshold) could fire by accident if the device gets pinned against something during normal operation, which would be a serious problem for a device shaped like a fist meant to sit on a shelf. A hold-during-power-on cannot happen by accident.
+
+**Time sync (`ntp.py`):** MicroPython's `ntptime.settime()` sets the RTC to UTC with no timezone or DST support. `NtpSync` layers a fixed, user-configurable UTC offset (`timezone.utc_offset_hours`, supports fractional values like 5.5 for India) on top to derive local time for night mode and the daily light-hours midnight rollover (`local_time()` / `local_date()`). **No automatic DST** - a full timezone/DST rules database is far more than this project needs, so a region observing DST requires manually updating the offset twice a year; documented as a known limitation rather than solved. A single sync attempt (`sync_once()`) briefly blocks the event loop (typically well under a second) - accepted as a reasonable tradeoff rather than building a fully non-blocking NTP client. The background task (`sync_forever()`) re-syncs every 24h to correct RTC drift, retrying with capped exponential backoff (5s, 10s, 20s... capped at 5 min) on failure. Callers must check `is_synced()` before trusting `local_time()`/`local_date()` for anything correctness-sensitive (e.g. night mode) - an unsynced RTC returns `(0, 0)` rather than a plausible-looking wrong value.
 
 **BLE pairing flow:** triggered by button long-press (3s) OR remote MQTT command. 60s scan window, blinking blue LED. Explicit user confirmation required even with only one candidate found (avoids accidentally pairing a neighbor's device).
 
@@ -166,7 +178,10 @@ MTU negotiation attempted at connect; falls back to chunked fragments (header by
 
 ## Open items
 
+- Idle animations and user-selectable status LED color options - deferred, no design started yet.
+- Additional button press combinations, or a second physical button - deferred, no design started yet.
 - `light_fc.red_min` / `light_fc.red_max` (sunburn/high-intensity thresholds) - **unset, no sourced data yet**. Blocks `high_intensity_hours` tracking from having any real effect.
+- **main.py integration requirement:** `display.py`'s `now_provider` should be wired to `ntp.local_time`, but night mode must only be treated as active once `ntp.is_synced()` returns True - otherwise an unsynced RTC (which returns `(0,0)`) could incorrectly evaluate as "inside the night window" depending on the configured start/end hours. Not yet resolved since `main.py` doesn't exist yet.
 - Pump and grow light removed from base board scope entirely - deferred to a future BLE-connected watering/lighting module.
 - Sensor loop failure-escalation policy not yet decided (e.g. what happens after N consecutive DHT11 read failures).
 - GPIO pin map not yet finalized across all sensors/peripherals.
