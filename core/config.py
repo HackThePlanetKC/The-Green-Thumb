@@ -38,8 +38,14 @@ DEFAULT_CONFIG = {
             "enabled": True,
             "start_hour": 22, "start_minute": 0,   # 24hr, local time (requires NTP sync)
             "end_hour": 7, "end_minute": 0,
-            "led_off": False,   # also disable the WS2812 status LED during night mode - consumed by status_led.py (not yet written)
+            "led_off": False,   # also disable the WS2812 status LED during night mode - consumed by status_led.py
+            "red_overrides_led_off": False,   # if true, an ESCALATED (blinking) red status shows even when led_off is set. Does NOT apply to plain solid red - only the post-delay escalated tier.
         },
+    },
+    "status_led": {
+        "brightness": 0.15,   # 0.0-1.0 scalar applied to all colors - PLACEHOLDER, needs real tuning once the diffused-fingernail enclosure is physically built
+        "blink_interval_ms": 500,
+        "red_escalation_delay_s": 3600,   # how long red must persist before escalating to blinking + requires_immediate_attention flag. UX choice, not a sourced threshold - starting default, tune to preference
     },
     "thresholds": {
         "temp_f": {

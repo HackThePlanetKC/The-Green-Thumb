@@ -66,9 +66,10 @@ All core design decisions — MQTT topic structure, health-threshold logic, cali
 
 ### In progress / up next
 - [x] `drivers/display.py` — OLED screen cycling + night mode
-- [ ] `drivers/status_led.py` — WS2812 health colors + pairing indicator
-- [ ] `drivers/button.py` — short/long press handling
-- [ ] `core/wifi.py`, `core/ntp.py` — connectivity & time sync
+- [x] `drivers/status_led.py` — WS2812 health colors + pairing indicator
+- [x] `drivers/button.py` — short/long press handling
+- [x] `core/wifi.py`, `core/identity.py` — connectivity & base_id derivation
+- [ ] `core/ntp.py` — time sync
 - [ ] `core/mqtt_client.py` — topic builder, pub/sub wrapper, LWT
 - [ ] `core/health.py` — green/yellow/red calculation
 - [ ] `core/light_tracker.py` — daily light-hours accumulator

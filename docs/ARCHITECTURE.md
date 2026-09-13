@@ -39,12 +39,13 @@ Units: imperial (°F, foot-candles).
   light_sensor.py           # done (LDR, placeholder calibration - see open items)
   display.py                # done (screen cycling, night mode, dynamic screen list)
   icons.py                  # done (16x16 monochrome bitmap icons: temp, droplet, sun, health, wifi, module)
-  status_led.py             # not yet written
-  button.py                 # not yet written
+  status_led.py             # done (health colors, red escalation to blinking, pairing indicator, night mode interaction)
+  button.py                 # done (short/long/very-long press, debounce, dead zone)
 /core/
   storage.py                # done - atomic flash read/write helpers
   config.py                 # done - config schema, defaults, load/save
-  wifi.py                   # not yet written
+  identity.py                # done (base_id derived from WiFi MAC, shared by wifi.py and future mqtt_client.py)
+  wifi.py                   # done (async STA connect/retry, open AP fallback for setup)
   ntp.py                    # not yet written
   mqtt_client.py             # not yet written
   health.py                  # not yet written
@@ -128,7 +129,25 @@ QoS 1 everywhere. `<base_id>`/`<mod_id>` derived from MAC address.
 ```json
 {"action": "set_config", "path": "display.night_mode.enabled", "value": false}
 ```
-`display.night_mode.led_off` additionally suppresses the WS2812 status LED during the night-mode window once `status_led.py` is built (not yet written). Whether an urgent red-health-status LED should override `led_off` is not yet decided - to be settled when `status_led.py` is designed.
+**Status LED (`status_led.py`):** single WS2812, diffused under a thin printed section of the enclosure (a 3D-printed near-life-size fist/thumbs-up; LED sits under the thumbnail, display sits on the middle finger's face). Solid green/yellow/red for health status. If red persists continuously past a configurable delay (`status_led.red_escalation_delay_s`, default 3600s - a UX choice, not a sourced threshold), the LED switches from solid to **blinking** red and fires a `requires_immediate_attention` flag, added to the `health` MQTT payload:
+```json
+{
+  "status": "red",
+  "reasons": ["soil_moisture_low"],
+  "requires_immediate_attention": true
+}
+```
+This flag flip (either direction) also triggers an immediate out-of-cycle publish, same as the original red-transition rule. Pairing mode (blinking blue) overrides the health display entirely while active, and always bypasses night-mode suppression - it's a deliberate action the user just triggered. WiFi connecting/reconnecting shows as **breathing purple** (smooth sine-based brightness ramp, not a hard blink) - unlike pairing, this respects night-mode suppression, since a reconnect can happen unattended at any hour and there's no reason to light up a dark room over something the user didn't initiate. Night mode's `led_off` suppresses the LED, but **only the escalated/blinking red tier** can override that suppression, and only if `display.night_mode.red_overrides_led_off` is enabled (default off) - plain solid red never overrides night mode, and neither does the breathing-purple WiFi state. `status_led.brightness` (default 0.15, a 0.0-1.0 scalar) is a placeholder pending real tuning once the physical diffused enclosure exists.
+
+Priority order in `tick()`: pairing > WiFi connecting > health display.
+
+`display.night_mode.led_off` additionally suppresses the WS2812 status LED during the night-mode window - see above for the full escalation/override interaction.
+
+**Button (`button.py`):** polled (not IRQ-based) from an asyncio task, ~20ms recommended interval. Press bands: <50ms ignored (bounce), 50-1000ms = short press (fires `display.manual_next` on release), 1000-3000ms = dead zone (ignored entirely, avoids an imprecise release accidentally triggering either action), >=3000ms = long press (fires `pairing.start` once, while still held - not on release). Debounce window: 50ms. Re-entering WiFi setup mode is deliberately **not** a runtime press band - see below.
+
+**WiFi (`wifi.py` + `identity.py`):** async STA connection (never blocks other tasks during connect attempts). On failure, caller applies capped exponential backoff (`next_backoff_s()`: 1s, 2s, 4s... capped at 60s) between retries. A dropped connection after initial success keeps retrying STA in the background rather than falling back to AP - sensors/display/BLE keep working without WiFi; only MQTT/HA connectivity degrades until reconnect. AP (setup) mode is an **open network** (no password, simplest for initial setup), SSID `GreenThumb-Setup-<base_id>`, entered automatically if no credentials are saved at boot. AP+STA run concurrently (ESP32 supports both simultaneously), so entering setup mode doesn't interrupt an existing connection. `base_id` (used here and in the MQTT topic tree) is the last 3 bytes of the WiFi MAC, uppercase hex - `core/identity.py`, shared by both.
+
+**Re-entering setup mode: boot-hold, not a runtime press.** `wifi.check_setup_hold_at_boot(pin_num, hold_s=3)` is a blocking, one-shot check called from `main.py`'s startup sequence before the asyncio event loop starts - if the button is already held down at power-on and stays held for the full duration, the device boots into setup/AP mode instead of normal operation. This is intentionally separate from `button.py`'s runtime press detection: a runtime long-press (however long the threshold) could fire by accident if the device gets pinned against something during normal operation, which would be a serious problem for a device shaped like a fist meant to sit on a shelf. A hold-during-power-on cannot happen by accident.
 
 **BLE pairing flow:** triggered by button long-press (3s) OR remote MQTT command. 60s scan window, blinking blue LED. Explicit user confirmation required even with only one candidate found (avoids accidentally pairing a neighbor's device).
 
