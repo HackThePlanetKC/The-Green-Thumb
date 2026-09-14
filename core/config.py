@@ -95,6 +95,10 @@ DEFAULT_CONFIG = {
         "bright_raw": 65535,
         "bright_fc": 500,
         "calibrated": False,
+        # Same placeholder reasoning as soil_calibration.min_delta_raw -
+        # ~5% of the 0-65535 read_u16() range. Retune once the sensor is
+        # characterized.
+        "min_delta_raw": 3277,
     },
     "profile_name": "generic_houseplant",
 }
