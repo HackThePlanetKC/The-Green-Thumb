@@ -82,6 +82,15 @@ class WifiManager:
     def has_credentials(self):
         return bool(self._ssid)
 
+    def set_credentials(self, ssid, password):
+        """
+        Updates credentials at runtime - used by the setup web portal
+        after saving a new SSID/password, so it can immediately attempt
+        connect_sta() without requiring a reboot.
+        """
+        self._ssid = ssid
+        self._password = password
+
     async def connect_sta(self):
         """
         Attempts one STA connection attempt, awaiting up to

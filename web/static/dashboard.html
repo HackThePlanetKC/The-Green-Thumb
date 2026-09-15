@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Green Thumb</title>
+  <link rel="stylesheet" href="/style.css">
+  <script>
+    // Applied in <head>, before first paint, to avoid a flash of the
+    // wrong theme - only the detection/attribute-setting happens here;
+    // the toggle button's click handling lives in the script at the
+    // bottom of <body>, since it needs the button element to exist.
+    (function() {
+      const stored = localStorage.getItem("greenthumb-theme");
+      const prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+      document.documentElement.setAttribute("data-theme", stored || (prefersDark ? "dark" : "light"));
+    })();
+  </script>
+</head>
+<body>
+  <button class="theme-toggle" id="theme-toggle" title="Toggle dark mode">🌙</button>
+
+  <div class="card dashboard">
+    <div class="device-name-row">
+      <h1 id="device-name">Green Thumb</h1>
+      <button class="edit-btn" id="edit-name-btn" title="Rename device">✎</button>
+      <a href="/settings" class="settings-link" title="Settings">⚙️</a>
+    </div>
+    <div class="device-name-edit" id="device-name-edit">
+      <input type="text" id="device-name-input" maxlength="40">
+      <button id="save-name-btn">Save</button>
+      <button id="cancel-name-btn">Cancel</button>
+    </div>
+
+    <div class="health-badge" id="health-badge">
+      <span id="health-status">—</span>
+    </div>
+    <ul class="reasons" id="reasons"></ul>
+
+    <div class="readings">
+      <div class="reading">
+        <div class="reading-label">Temperature</div>
+        <div class="reading-value" id="temp">—</div>
+      </div>
+      <div class="reading">
+        <div class="reading-label">Humidity</div>
+        <div class="reading-value" id="humidity">—</div>
+      </div>
+      <div class="reading">
+        <div class="reading-label">Soil Moisture</div>
+        <div class="reading-value" id="soil">—</div>
+      </div>
+      <div class="reading">
+        <div class="reading-label">Light Today <button class="refresh-btn" id="refresh-light-btn" title="Refresh">↻</button></div>
+        <div class="reading-value" id="light">—</div>
+        <div class="reading-subtext" id="light-target"></div>
+      </div>
+    </div>
+
+    <div class="light-level-row" id="light-level-row" style="display:none;">
+      <span class="light-level-label">Light Level:</span>
+      <span class="light-level-value" id="light-level-value">—</span>
+    </div>
+
+    <div class="modules-section">
+      <div class="modules-header-row">
+        <div class="modules-header">Modules</div>
+        <a href="/pairing" class="settings-link" title="Pair a module">＋</a>
+      </div>
+      <div id="modules-list" class="modules-list">
+        <div class="modules-empty">No modules paired yet</div>
+      </div>
+    </div>
+
+    <div class="status-line">
+      <span id="wifi-status">WiFi: —</span>
+      <span id="mqtt-status">MQTT: —</span>
+    </div>
+  </div>
+
+  <script>
+    document.addEventListener("DOMContentLoaded", () => {
+      const btn = document.getElementById("theme-toggle");
+      const current = document.documentElement.getAttribute("data-theme");
+      btn.textContent = current === "dark" ? "☀️" : "🌙";
+      btn.addEventListener("click", () => {
+        const now = document.documentElement.getAttribute("data-theme");
+        const next = now === "dark" ? "light" : "dark";
+        document.documentElement.setAttribute("data-theme", next);
+        localStorage.setItem("greenthumb-theme", next);
+        btn.textContent = next === "dark" ? "☀️" : "🌙";
+      });
+    });
+  </script>
+
+  <script>
+    const HEALTH_COLORS = { green: "#2e7d32", yellow: "#f9a825", red: "#c62828" };
+
+    function fmt(value, unit) {
+      return (value === null || value === undefined) ? "—" : value + unit;
+    }
+
+    function renderModules(modules) {
+      const listEl = document.getElementById("modules-list");
+      listEl.innerHTML = "";
+      if (!modules || modules.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "modules-empty";
+        empty.textContent = "No modules paired yet";
+        listEl.appendChild(empty);
+        return;
+      }
+      modules.forEach(m => {
+        const card = document.createElement("div");
+        card.className = "module-card";
+        const dot = document.createElement("span");
+        dot.className = "module-dot " + (m.online ? "online" : "offline");
+        const label = document.createElement("span");
+        label.textContent = (m.type || "module").replace(/_/g, " ");
+        card.appendChild(dot);
+        card.appendChild(label);
+
+        const calLink = document.createElement("a");
+        calLink.href = "/calibration?module=" + encodeURIComponent(m.mod_id);
+        calLink.className = "module-cal-link";
+        calLink.textContent = m.needs_calibration ? "⚠ Calibrate" : "Calibrate";
+        if (m.needs_calibration) calLink.classList.add("needs-attention");
+        card.appendChild(calLink);
+
+        listEl.appendChild(card);
+      });
+    }
+
+    async function refresh() {
+      let data;
+      try {
+        const resp = await fetch("/api/state");
+        data = await resp.json();
+      } catch (e) {
+        document.getElementById("wifi-status").textContent = "WiFi: connection lost";
+        return;
+      }
+
+      if (!editingName) {
+        document.getElementById("device-name").textContent = data.device_name || "Green Thumb";
+      }
+
+      document.getElementById("temp").textContent = fmt(data.temp_f, "°F");
+      document.getElementById("humidity").textContent = fmt(data.humidity_pct, "%");
+      document.getElementById("soil").textContent = fmt(data.soil_moisture_pct, "%");
+
+      const status = data.health && data.health.status;
+      const badge = document.getElementById("health-badge");
+      const statusEl = document.getElementById("health-status");
+      if (status && HEALTH_COLORS[status]) {
+        badge.style.backgroundColor = HEALTH_COLORS[status];
+        statusEl.textContent = status.charAt(0).toUpperCase() + status.slice(1);
+      } else {
+        badge.style.backgroundColor = "#999";
+        statusEl.textContent = "Unknown";
+      }
+
+      const reasonsEl = document.getElementById("reasons");
+      reasonsEl.innerHTML = "";
+      const reasons = (data.health && data.health.reasons) || [];
+      reasons.forEach(r => {
+        const li = document.createElement("li");
+        li.textContent = r.replace(/_/g, " ");
+        reasonsEl.appendChild(li);
+      });
+
+      renderModules(data.modules);
+
+      const lightLevelRow = document.getElementById("light-level-row");
+      if (data.light_level_label) {
+        lightLevelRow.style.display = "";
+        document.getElementById("light-level-value").textContent = data.light_level_label;
+      } else {
+        lightLevelRow.style.display = "none";
+      }
+
+      document.getElementById("wifi-status").textContent =
+        "WiFi: " + (data.wifi_ip ? data.wifi_ip : "not connected");
+      document.getElementById("mqtt-status").textContent =
+        "MQTT: " + (data.mqtt_connected ? "connected" : "not connected");
+    }
+
+    let editingName = false;
+
+    function startEditName() {
+      editingName = true;
+      document.getElementById("device-name-input").value =
+        document.getElementById("device-name").textContent;
+      document.getElementById("device-name-edit").classList.add("active");
+    }
+
+    function cancelEditName() {
+      editingName = false;
+      document.getElementById("device-name-edit").classList.remove("active");
+    }
+
+    async function saveName() {
+      const input = document.getElementById("device-name-input");
+      const name = input.value.trim();
+      if (!name) return;
+      try {
+        const resp = await fetch("/api/set_name", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: "name=" + encodeURIComponent(name),
+        });
+        const result = await resp.json();
+        if (result.success) {
+          document.getElementById("device-name").textContent = result.device_name;
+        }
+      } catch (e) {
+        // fetch failed - leave the edit form open so the user can retry rather than
+        // silently discarding what they typed
+        return;
+      }
+      cancelEditName();
+    }
+
+    document.getElementById("edit-name-btn").addEventListener("click", startEditName);
+    document.getElementById("cancel-name-btn").addEventListener("click", cancelEditName);
+    document.getElementById("save-name-btn").addEventListener("click", saveName);
+
+    refresh();
+    setInterval(refresh, 5000);
+
+    function formatDuration(hours) {
+      if (hours === null || hours === undefined) return "—";
+      const totalMinutes = Math.round(hours * 60);
+      const h = Math.floor(totalMinutes / 60);
+      const m = totalMinutes % 60;
+      return h + "h " + m + "m";
+    }
+
+    async function loadLightHoursToday() {
+      let data;
+      try {
+        const resp = await fetch("/api/light_hours_today");
+        data = await resp.json();
+      } catch (e) {
+        return; // leave whatever was last shown rather than blanking it on a transient fetch failure
+      }
+      document.getElementById("light").textContent = formatDuration(data.light_hours_today);
+      if (data.target_min != null && data.target_max != null) {
+        document.getElementById("light-target").textContent =
+          "of " + data.target_min + "–" + data.target_max + "h target";
+      } else {
+        document.getElementById("light-target").textContent = "";
+      }
+    }
+
+    document.getElementById("refresh-light-btn").addEventListener("click", loadLightHoursToday);
+
+    // Static on load, deliberately NOT part of the 5s refresh() loop above -
+    // only re-fetched when the user clicks the refresh button.
+    loadLightHoursToday();
+  </script>
+</body>
+</html>

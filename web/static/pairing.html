@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Green Thumb — Pairing</title>
+  <link rel="stylesheet" href="/style.css">
+  <script>
+    (function() {
+      const stored = localStorage.getItem("greenthumb-theme");
+      const prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+      document.documentElement.setAttribute("data-theme", stored || (prefersDark ? "dark" : "light"));
+    })();
+  </script>
+</head>
+<body>
+  <button class="theme-toggle" id="theme-toggle" title="Toggle dark mode">🌙</button>
+
+  <div class="card settings">
+    <div class="settings-header-row">
+      <h1>Pair a Module</h1>
+      <a href="/" class="back-link">← Dashboard</a>
+    </div>
+
+    <div id="pairing-body"></div>
+  </div>
+
+  <script>
+    document.addEventListener("DOMContentLoaded", () => {
+      const btn = document.getElementById("theme-toggle");
+      const current = document.documentElement.getAttribute("data-theme");
+      btn.textContent = current === "dark" ? "☀️" : "🌙";
+      btn.addEventListener("click", () => {
+        const now = document.documentElement.getAttribute("data-theme");
+        const next = now === "dark" ? "light" : "dark";
+        document.documentElement.setAttribute("data-theme", next);
+        localStorage.setItem("greenthumb-theme", next);
+        btn.textContent = next === "dark" ? "☀️" : "🌙";
+      });
+    });
+
+    let pollTimer = null;
+
+    async function postCommand(fields) {
+      const params = new URLSearchParams(fields);
+      const resp = await fetch("/api/pairing/command", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: params.toString(),
+      });
+      return resp.json();
+    }
+
+    async function fetchStatus() {
+      const resp = await fetch("/api/pairing/status");
+      return resp.json();
+    }
+
+    function stopPolling() {
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    }
+
+    function startPolling() {
+      stopPolling();
+      pollTimer = setInterval(async () => {
+        const status = await fetchStatus();
+        render(status);
+      }, 2000);
+    }
+
+    function render(status) {
+      const body = document.getElementById("pairing-body");
+      body.innerHTML = "";
+
+      if (status.state === "idle") {
+        stopPolling();
+        const p = document.createElement("p");
+        p.className = "field-note";
+        p.textContent = "No pairing in progress.";
+        body.appendChild(p);
+
+        const btn = document.createElement("button");
+        btn.textContent = "Start Pairing (60s scan)";
+        btn.addEventListener("click", async () => {
+          const s = await postCommand({ action: "start" });
+          render(s);
+          startPolling();
+        });
+        body.appendChild(btn);
+        return;
+      }
+
+      if (status.state === "scanning") {
+        const p = document.createElement("p");
+        p.textContent = "Scanning for modules... (up to 60s)";
+        body.appendChild(p);
+        addCancelButton(body);
+        return;
+      }
+
+      if (status.state === "awaiting_select") {
+        stopPolling();
+        const candidates = status.candidates || [];
+        if (candidates.length === 0) {
+          const p = document.createElement("p");
+          p.className = "field-note";
+          p.textContent = "No modules found. Make sure the module is powered on and in range, then try again.";
+          body.appendChild(p);
+        } else {
+          const p = document.createElement("p");
+          p.textContent = "Found " + candidates.length + " module(s). Choose one to pair:";
+          body.appendChild(p);
+          candidates.forEach(c => {
+            const row = document.createElement("div");
+            row.className = "point-row";
+            const label = document.createElement("span");
+            label.textContent = (c.type || "module").replace(/_/g, " ") + " (" + c.address + ")";
+            const pairBtn = document.createElement("button");
+            pairBtn.textContent = "Pair This";
+            pairBtn.addEventListener("click", async () => {
+              const s = await postCommand({ action: "select", address: c.address });
+              render(s);
+            });
+            row.appendChild(label);
+            row.appendChild(pairBtn);
+            body.appendChild(row);
+          });
+        }
+        addCancelButton(body);
+        return;
+      }
+
+      if (status.state === "paired") {
+        stopPolling();
+        const p = document.createElement("p");
+        p.className = "success";
+        p.textContent = "Paired! " + (status.type || "module").replace(/_/g, " ") + " (ID: " + status.mod_id + ")";
+        body.appendChild(p);
+
+        const checkingNote = document.createElement("p");
+        checkingNote.className = "field-note";
+        checkingNote.id = "cal-check-note";
+        checkingNote.textContent = "Checking whether this module needs calibration...";
+        body.appendChild(checkingNote);
+
+        const doneBtn = document.createElement("button");
+        doneBtn.textContent = "Done";
+        doneBtn.addEventListener("click", async () => {
+          const s = await postCommand({ action: "acknowledge" });
+          render(s);
+        });
+        body.appendChild(doneBtn);
+
+        checkModuleCalibration(status.mod_id);
+        return;
+      }
+    }
+
+    async function checkModuleCalibration(modId) {
+      // relay_forever() picks up newly-paired modules on a 5s cycle
+      // (see core/module_manager.py) - the module isn't necessarily
+      // connected, let alone has reported its first State, the instant
+      // pairing completes. Poll briefly rather than checking once and
+      // giving up.
+      const note = document.getElementById("cal-check-note");
+      const maxAttempts = 10; // ~20s at 2s intervals
+      for (let i = 0; i < maxAttempts; i++) {
+        await new Promise(r => setTimeout(r, 2000));
+        if (!document.getElementById("cal-check-note")) return; // user navigated away/clicked Done
+        try {
+          const resp = await fetch("/api/state");
+          const data = await resp.json();
+          const mod = (data.modules || []).find(m => m.mod_id === modId);
+          if (mod && mod.online) {
+            if (mod.needs_calibration) {
+              note.innerHTML = "";
+              note.className = "success";
+              const link = document.createElement("a");
+              link.href = "/calibration?module=" + encodeURIComponent(modId);
+              link.textContent = "This module needs calibration - calibrate it now →";
+              note.appendChild(link);
+            } else {
+              note.textContent = "No calibration needed for this module.";
+            }
+            return;
+          }
+        } catch (e) {
+          // fetch failed - keep trying within the loop rather than giving up on one bad request
+        }
+      }
+      note.textContent = "Couldn't confirm module status yet - check the dashboard once it's connected.";
+    }
+
+    function addCancelButton(body) {
+      const cancelBtn = document.createElement("button");
+      cancelBtn.textContent = "Cancel";
+      cancelBtn.className = "cancel-btn";
+      cancelBtn.addEventListener("click", async () => {
+        const s = await postCommand({ action: "cancel" });
+        render(s);
+      });
+      body.appendChild(cancelBtn);
+    }
+
+    async function init() {
+      const status = await fetchStatus();
+      render(status);
+      if (status.state === "scanning") startPolling();
+    }
+
+    init();
+  </script>
+</body>
+</html>

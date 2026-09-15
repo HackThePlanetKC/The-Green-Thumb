@@ -31,24 +31,17 @@ deliberate, immediate action the user just triggered by pressing the
 button, so it should always be visible regardless of time of day.
 
 WiFi connecting is shown as breathing (smooth sine-fade) purple. Unlike
-pairing, this is NOT unconditionally exempt from night-mode suppression -
-a WiFi drop and reconnect can happen unattended at any hour (e.g. a
-router reboot at 3am), and there's no reason for the device to light up
-in a dark room over something the user didn't initiate. It shares the
-same escalated-red override as the plain health display, though (see
-below): entering WiFi setup mode itself requires a deliberate boot-time
-button hold (core/wifi.check_setup_hold_at_boot), which can't happen by
-accident, so there's no need to carve out a separate suppression rule
-for it beyond what solid/escalated red already gets.
+pairing, this is NOT exempt from night-mode suppression - a WiFi drop
+and reconnect can happen unattended at any hour (e.g. a router reboot
+at 3am), and there's no reason for the device to light up in a dark
+room over something the user didn't initiate.
 
 Night mode can suppress the LED (`led_off`). By design, this suppression
 does NOT get overridden by plain solid red - only by the escalated
 (blinking) tier, and only if `red_overrides_led_off` is enabled. This
 matches the two-tier urgency model: solid red is "needs attention",
 blinking red is "needs attention now", and only the latter is treated as
-urgent enough to matter during night mode. The same override applies
-whether the LED would otherwise be showing plain health or WiFi
-breathing purple - there is one suppression/override rule, not two.
+urgent enough to matter during night mode.
 
 Brightness is a 0.0-1.0 scalar applied to all colors. The default
 (0.15) is a placeholder - the enclosure diffuses this LED under a thin

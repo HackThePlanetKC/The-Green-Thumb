@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Green Thumb — Settings</title>
+  <link rel="stylesheet" href="/style.css">
+  <script>
+    (function() {
+      const stored = localStorage.getItem("greenthumb-theme");
+      const prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+      document.documentElement.setAttribute("data-theme", stored || (prefersDark ? "dark" : "light"));
+    })();
+  </script>
+</head>
+<body>
+  <button class="theme-toggle" id="theme-toggle" title="Toggle dark mode">🌙</button>
+
+  <div class="card settings">
+    <div class="settings-header-row">
+      <h1>Settings</h1>
+      <a href="/" class="back-link">← Dashboard</a>
+    </div>
+    <div id="save-status" class="save-status"></div>
+
+    <label class="checkbox-label advanced-toggle">
+      <input type="checkbox" id="advanced-toggle"> Show advanced settings
+    </label>
+
+    <form id="settings-form">
+      <details open>
+        <summary>Temperature (°F)</summary>
+        <div class="field-grid">
+          <label>Green min <input type="number" step="any" name="temp_green_min"></label>
+          <label>Green max <input type="number" step="any" name="temp_green_max"></label>
+          <label>Red min <input type="number" step="any" name="temp_red_min"></label>
+          <label>Red max <input type="number" step="any" name="temp_red_max"></label>
+        </div>
+      </details>
+
+      <details open>
+        <summary>Humidity (%)</summary>
+        <div class="field-grid">
+          <label>Green min <input type="number" step="any" name="humidity_green_min"></label>
+          <label>Green max <input type="number" step="any" name="humidity_green_max"></label>
+          <label>Red min <input type="number" step="any" name="humidity_red_min"></label>
+          <label>Red max <input type="number" step="any" name="humidity_red_max"></label>
+        </div>
+      </details>
+
+      <details open>
+        <summary>Soil Moisture (%)</summary>
+        <div class="field-grid">
+          <label>Green min <input type="number" step="any" name="soil_green_min"></label>
+          <label>Green max <input type="number" step="any" name="soil_green_max"></label>
+          <label>Red min <input type="number" step="any" name="soil_red_min"></label>
+          <label>Red max <input type="number" step="any" name="soil_red_max"></label>
+        </div>
+      </details>
+
+      <details open>
+        <summary>Light (foot-candles)</summary>
+        <div class="field-grid">
+          <label>Green min <input type="number" step="any" name="light_green_min"></label>
+          <label>Green max <input type="number" step="any" name="light_green_max"></label>
+          <label>Red min <input type="number" step="any" name="light_red_min" placeholder="not set"></label>
+          <label>Red max <input type="number" step="any" name="light_red_max" placeholder="not set"></label>
+        </div>
+        <p class="field-note">Red thresholds are optional and currently unset by default — no sourced sunburn/high-intensity data exists yet. Leave blank to keep light capped at yellow.</p>
+      </details>
+
+      <details>
+        <summary>Light Tracking</summary>
+        <div class="field-grid">
+          <label>"Getting light" threshold (fc) <input type="number" step="any" name="light_present_threshold_fc"></label>
+          <label>Daily target min (hours) <input type="number" step="any" name="light_hours_target_min"></label>
+          <label>Daily target max (hours) <input type="number" step="any" name="light_hours_target_max"></label>
+        </div>
+      </details>
+
+      <details>
+        <summary>Timing</summary>
+        <div class="field-grid">
+          <label>Sensor sample interval (s) <input type="number" name="sample_interval_s"></label>
+          <label>MQTT publish interval (s) <input type="number" name="publish_interval_s"></label>
+          <label>BLE pairing scan timeout (s) <input type="number" name="pairing_timeout_s"></label>
+        </div>
+      </details>
+
+      <details>
+        <summary>Display & Night Mode</summary>
+        <div class="field-grid">
+          <label>Auto-cycle interval (s) <input type="number" name="auto_cycle_interval_s"></label>
+          <label>Resume idle time (s) <input type="number" name="resume_idle_s"></label>
+        </div>
+        <label class="checkbox-label"><input type="checkbox" name="night_mode_enabled"> Night mode enabled</label>
+        <div class="field-grid">
+          <label>Start hour (0-23) <input type="number" min="0" max="23" name="night_mode_start_hour"></label>
+          <label>Start minute <input type="number" min="0" max="59" name="night_mode_start_minute"></label>
+          <label>End hour (0-23) <input type="number" min="0" max="23" name="night_mode_end_hour"></label>
+          <label>End minute <input type="number" min="0" max="59" name="night_mode_end_minute"></label>
+        </div>
+        <label class="checkbox-label"><input type="checkbox" name="night_mode_led_off"> Turn off status LED during night mode</label>
+        <label class="checkbox-label"><input type="checkbox" name="night_mode_red_overrides_led_off"> Escalated red alerts override LED-off</label>
+      </details>
+
+      <details>
+        <summary>Status LED</summary>
+        <div class="field-grid">
+          <label>Brightness (0.0–1.0) <input type="number" step="0.01" min="0" max="1" name="led_brightness"></label>
+          <label>Blink interval (ms) <input type="number" name="led_blink_interval_ms"></label>
+          <label>Red escalation delay (s) <input type="number" name="led_red_escalation_delay_s"></label>
+        </div>
+      </details>
+
+      <details>
+        <summary>Timezone</summary>
+        <div class="field-grid">
+          <label>UTC offset (hours) <input type="number" step="0.5" name="utc_offset_hours"></label>
+        </div>
+        <p class="field-note">No automatic DST — update this manually if your region observes it.</p>
+      </details>
+
+      <div id="advanced-fields">
+        <details>
+          <summary>Direct Light Target (optional)</summary>
+          <p class="field-note">Some plants need a minimum amount of direct/high-intensity light per day. This only takes effect once a Light red max threshold is also set above - without it, "high-intensity" isn't measurable yet, so this stays informational-only and never affects overall health status.</p>
+          <div class="field-grid">
+            <label>Minimum hours <input type="number" step="any" name="light_high_intensity_target_min" placeholder="not set"></label>
+            <label>Maximum hours <input type="number" step="any" name="light_high_intensity_target_max" placeholder="not set"></label>
+          </div>
+        </details>
+      </div>
+
+      <button type="submit">Save Settings</button>
+    </form>
+
+    <div id="advanced-light-mode">
+      <details class="light-mode-section">
+        <summary>Light Sensor Mode</summary>
+        <p class="field-note">Choose one continuous foot-candle reading (default), or sample named reference points (e.g. "Direct Sun", "Bright Shade", "Low Light" — name them however makes sense for your setup) and show whichever one the current reading is closest to on the dashboard.</p>
+
+        <label class="checkbox-label">
+          <input type="radio" name="light_mode_radio" value="single" id="light-mode-single"> Single continuous reading (fc)
+        </label>
+        <label class="checkbox-label">
+          <input type="radio" name="light_mode_radio" value="multi_point" id="light-mode-multi"> Named reference points
+        </label>
+
+        <div id="light-points-section" class="light-points-section">
+          <div id="light-points-list"></div>
+          <div class="add-point-row">
+            <input type="text" id="new-point-label" placeholder="Label (e.g. Direct Sun)" maxlength="40">
+            <button type="button" id="sample-light-btn">Sample Now</button>
+            <span id="sampled-raw-display"></span>
+            <button type="button" id="add-point-btn" disabled>Add Point</button>
+          </div>
+        </div>
+      </details>
+    </div>
+
+    <details class="calibration-section">
+      <summary>Calibration Status</summary>
+      <div class="cal-status-row">
+        <span>Soil moisture:</span>
+        <span id="soil-cal-status" class="cal-badge">—</span>
+      </div>
+      <div class="cal-status-row">
+        <span>Light sensor:</span>
+        <span id="light-cal-status" class="cal-badge">—</span>
+      </div>
+      <p class="field-note">Calibration values aren't editable here — <a href="/calibration">go to the calibration page</a> to (re)calibrate.</p>
+    </details>
+
+    <p class="field-note"><a href="/pairing">Pair a new module →</a></p>
+
+    <details class="mqtt-section">
+      <summary>MQTT Broker Connection</summary>
+      <div id="mqtt-status" class="mqtt-status-line"></div>
+      <form id="mqtt-form">
+        <label>Broker address <input type="text" name="broker" id="mqtt-broker" required></label>
+        <label>Port <input type="number" name="port" id="mqtt-port"></label>
+        <label>Username <input type="text" name="username" id="mqtt-username"></label>
+        <label>Password <input type="password" name="password" id="mqtt-password" placeholder="(unchanged if left blank)"></label>
+        <button type="submit">Save & Reconnect</button>
+      </form>
+    </details>
+  </div>
+
+  <script>
+    document.addEventListener("DOMContentLoaded", () => {
+      const btn = document.getElementById("theme-toggle");
+      const current = document.documentElement.getAttribute("data-theme");
+      btn.textContent = current === "dark" ? "☀️" : "🌙";
+      btn.addEventListener("click", () => {
+        const now = document.documentElement.getAttribute("data-theme");
+        const next = now === "dark" ? "light" : "dark";
+        document.documentElement.setAttribute("data-theme", next);
+        localStorage.setItem("greenthumb-theme", next);
+        btn.textContent = next === "dark" ? "☀️" : "🌙";
+      });
+    });
+
+    function showStatus(el, message, isError) {
+      el.textContent = message;
+      el.className = (el.id === "save-status" ? "save-status" : el.className.split(" ")[0]) + " " + (isError ? "error" : "success");
+      setTimeout(() => { el.textContent = ""; el.className = el.className.split(" ")[0]; }, 4000);
+    }
+
+    async function loadSettings() {
+      let data;
+      try {
+        const resp = await fetch("/api/settings");
+        data = await resp.json();
+      } catch (e) {
+        showStatus(document.getElementById("save-status"), "Could not load settings — is the server reachable?", true);
+        return;
+      }
+
+      const form = document.getElementById("settings-form");
+      for (const [name, value] of Object.entries(data.fields)) {
+        const input = form.elements[name];
+        if (!input) continue;
+        if (input.type === "checkbox") {
+          input.checked = !!value;
+        } else {
+          input.value = (value === null || value === undefined) ? "" : value;
+        }
+      }
+
+      const soilBadge = document.getElementById("soil-cal-status");
+      soilBadge.textContent = data.calibration.soil_calibrated ? "Calibrated" : "Not calibrated";
+      soilBadge.classList.toggle("cal-yes", data.calibration.soil_calibrated);
+      soilBadge.classList.toggle("cal-no", !data.calibration.soil_calibrated);
+
+      const lightBadge = document.getElementById("light-cal-status");
+      lightBadge.textContent = data.calibration.light_calibrated ? "Calibrated" : "Not calibrated";
+      lightBadge.classList.toggle("cal-yes", data.calibration.light_calibrated);
+      lightBadge.classList.toggle("cal-no", !data.calibration.light_calibrated);
+
+      document.getElementById("mqtt-broker").value = data.mqtt.broker || "";
+      document.getElementById("mqtt-port").value = data.mqtt.port || 1883;
+      document.getElementById("mqtt-username").value = data.mqtt.username || "";
+      document.getElementById("mqtt-password").placeholder = data.mqtt.password_set
+        ? "(unchanged if left blank)" : "(none set)";
+
+      const mqttStatusEl = document.getElementById("mqtt-status");
+      mqttStatusEl.textContent = data.mqtt.connected ? "● Connected" : "○ Not connected";
+      mqttStatusEl.className = "mqtt-status-line " + (data.mqtt.connected ? "cal-yes" : "cal-no");
+
+      renderLightMode(data.light_mode.mode, data.light_mode.points);
+    }
+
+    function renderLightMode(mode, points) {
+      document.getElementById("light-mode-single").checked = mode === "single";
+      document.getElementById("light-mode-multi").checked = mode === "multi_point";
+      currentPoints = points;
+      renderPointsList(points);
+    }
+
+    let currentPoints = [];
+    let lastSampledRaw = null;
+
+    function renderPointsList(points) {
+      const listEl = document.getElementById("light-points-list");
+      listEl.innerHTML = "";
+      if (points.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "modules-empty";
+        empty.textContent = "No reference points added yet.";
+        listEl.appendChild(empty);
+        return;
+      }
+      points.forEach((p, i) => {
+        const row = document.createElement("div");
+        row.className = "point-row";
+        const label = document.createElement("span");
+        label.textContent = p.label + " (" + p.raw + ")";
+        const removeBtn = document.createElement("button");
+        removeBtn.type = "button";
+        removeBtn.textContent = "Remove";
+        removeBtn.addEventListener("click", () => removePoint(i));
+        row.appendChild(label);
+        row.appendChild(removeBtn);
+        listEl.appendChild(row);
+      });
+    }
+
+    async function removePoint(index) {
+      try {
+        const resp = await fetch("/api/settings/light_points/remove", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: "index=" + index,
+        });
+        const result = await resp.json();
+        if (result.success) {
+          currentPoints = result.points;
+          renderPointsList(currentPoints);
+        }
+      } catch (e) { /* leave list as-is, user can retry */ }
+    }
+
+    document.getElementById("sample-light-btn").addEventListener("click", async () => {
+      const display = document.getElementById("sampled-raw-display");
+      try {
+        const resp = await fetch("/api/settings/sample_light");
+        const data = await resp.json();
+        if (data.raw === null) {
+          display.textContent = "No sensor available";
+          lastSampledRaw = null;
+        } else {
+          display.textContent = "Sampled: " + data.raw;
+          lastSampledRaw = data.raw;
+        }
+      } catch (e) {
+        display.textContent = "Sample failed";
+        lastSampledRaw = null;
+      }
+      updateAddButtonState();
+    });
+
+    document.getElementById("new-point-label").addEventListener("input", updateAddButtonState);
+
+    function updateAddButtonState() {
+      const label = document.getElementById("new-point-label").value.trim();
+      document.getElementById("add-point-btn").disabled = !(label && lastSampledRaw !== null);
+    }
+
+    document.getElementById("add-point-btn").addEventListener("click", async () => {
+      const label = document.getElementById("new-point-label").value.trim();
+      if (!label || lastSampledRaw === null) return;
+      try {
+        const params = new URLSearchParams();
+        params.append("label", label);
+        params.append("raw", lastSampledRaw);
+        const resp = await fetch("/api/settings/light_points/add", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: params.toString(),
+        });
+        const result = await resp.json();
+        if (result.success) {
+          currentPoints = result.points;
+          renderPointsList(currentPoints);
+          document.getElementById("new-point-label").value = "";
+          document.getElementById("sampled-raw-display").textContent = "";
+          lastSampledRaw = null;
+          updateAddButtonState();
+        }
+      } catch (e) { /* leave form as-is, user can retry */ }
+    });
+
+    document.querySelectorAll('input[name="light_mode_radio"]').forEach(radio => {
+      radio.addEventListener("change", async (e) => {
+        try {
+          await fetch("/api/settings/light_mode", {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: "mode=" + e.target.value,
+          });
+        } catch (err) { /* setting stays visually selected; next load will reflect actual saved state */ }
+      });
+    });
+
+    const advancedToggle = document.getElementById("advanced-toggle");
+    const advancedSections = [
+      document.getElementById("advanced-fields"),
+      document.getElementById("advanced-light-mode"),
+    ];
+
+    function applyAdvancedVisibility(show) {
+      advancedSections.forEach(el => { el.style.display = show ? "" : "none"; });
+    }
+
+    const storedAdvanced = localStorage.getItem("greenthumb-show-advanced") === "true";
+    advancedToggle.checked = storedAdvanced;
+    applyAdvancedVisibility(storedAdvanced);
+
+    advancedToggle.addEventListener("change", () => {
+      applyAdvancedVisibility(advancedToggle.checked);
+      localStorage.setItem("greenthumb-show-advanced", advancedToggle.checked ? "true" : "false");
+    });
+
+    document.getElementById("settings-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const form = e.target;
+      const params = new URLSearchParams();
+      for (const el of form.elements) {
+        if (!el.name) continue;
+        if (el.type === "checkbox") {
+          params.append(el.name, el.checked ? "true" : "false");
+        } else {
+          params.append(el.name, el.value);
+        }
+      }
+      const statusEl = document.getElementById("save-status");
+      try {
+        const resp = await fetch("/api/settings/save", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: params.toString(),
+        });
+        const result = await resp.json();
+        if (result.skipped && result.skipped.length > 0) {
+          showStatus(statusEl, "Saved, but skipped invalid values: " + result.skipped.join(", "), true);
+        } else {
+          showStatus(statusEl, "Settings saved.", false);
+        }
+      } catch (err) {
+        showStatus(statusEl, "Save failed — is the server reachable?", true);
+      }
+    });
+
+    document.getElementById("mqtt-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const form = e.target;
+      const params = new URLSearchParams();
+      for (const el of form.elements) {
+        if (el.name) params.append(el.name, el.value);
+      }
+      const mqttStatusEl = document.getElementById("mqtt-status");
+      try {
+        const resp = await fetch("/api/settings/mqtt", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: params.toString(),
+        });
+        const result = await resp.json();
+        if (result.success) {
+          mqttStatusEl.textContent = result.connected ? "● Connected" : "○ Saved, but could not connect";
+          mqttStatusEl.className = "mqtt-status-line " + (result.connected ? "cal-yes" : "cal-no");
+          document.getElementById("mqtt-password").value = "";
+        } else {
+          mqttStatusEl.textContent = "Error: " + result.error;
+          mqttStatusEl.className = "mqtt-status-line cal-no";
+        }
+      } catch (err) {
+        mqttStatusEl.textContent = "Request failed — is the server reachable?";
+        mqttStatusEl.className = "mqtt-status-line cal-no";
+      }
+    });
+
+    loadSettings();
+  </script>
+</body>
+</html>

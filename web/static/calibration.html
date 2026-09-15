@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Green Thumb — Calibration</title>
+  <link rel="stylesheet" href="/style.css">
+  <script>
+    (function() {
+      const stored = localStorage.getItem("greenthumb-theme");
+      const prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+      document.documentElement.setAttribute("data-theme", stored || (prefersDark ? "dark" : "light"));
+    })();
+  </script>
+</head>
+<body>
+  <button class="theme-toggle" id="theme-toggle" title="Toggle dark mode">🌙</button>
+
+  <div class="card settings">
+    <div class="settings-header-row">
+      <h1>Calibration</h1>
+      <a href="/" class="back-link">← Dashboard</a>
+    </div>
+
+    <details open class="cal-section">
+      <summary>Soil Moisture</summary>
+      <div id="soil-cal-body"></div>
+    </details>
+
+    <details open class="cal-section">
+      <summary>Light Sensor</summary>
+      <p class="field-note">You'll need an external light reference (a lux meter or phone app) to supply the known foot-candle value for the bright reading.</p>
+      <div id="light-cal-body"></div>
+    </details>
+
+    <details open class="cal-section" id="modules-cal-section">
+      <summary>Modules</summary>
+      <p class="field-note">Each module defines its own calibration requirements - this is a passthrough to whatever it reports needing.</p>
+      <div id="modules-cal-body"></div>
+    </details>
+  </div>
+
+  <script>
+    document.addEventListener("DOMContentLoaded", () => {
+      const btn = document.getElementById("theme-toggle");
+      const current = document.documentElement.getAttribute("data-theme");
+      btn.textContent = current === "dark" ? "☀️" : "🌙";
+      btn.addEventListener("click", () => {
+        const now = document.documentElement.getAttribute("data-theme");
+        const next = now === "dark" ? "light" : "dark";
+        document.documentElement.setAttribute("data-theme", next);
+        localStorage.setItem("greenthumb-theme", next);
+        btn.textContent = next === "dark" ? "☀️" : "🌙";
+      });
+    });
+
+    // core/calibration.py drives ONE state machine for both soil and
+    // light - target tells us which one is currently active. Both
+    // sections render from the same /api/calibration/status response;
+    // whichever target isn't active just shows its own idle "Start" button.
+    const STEP_LABELS = {
+      soil: { first: "read_dry", second: "read_wet", firstLabel: "Read Dry", secondLabel: "Read Wet" },
+      light: { first: "read_dark", second: "read_bright", firstLabel: "Read Dark", secondLabel: "Read Bright" },
+    };
+
+    async function postCommand(fields) {
+      const params = new URLSearchParams(fields);
+      const resp = await fetch("/api/calibration/command", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: params.toString(),
+      });
+      return resp.json();
+    }
+
+    function renderSection(target, status) {
+      const body = document.getElementById(target + "-cal-body");
+      const steps = STEP_LABELS[target];
+      body.innerHTML = "";
+
+      if (status.error && status.target === target) {
+        const err = document.createElement("p");
+        err.className = "error";
+        err.textContent = "Error: " + status.error.replace(/_/g, " ");
+        body.appendChild(err);
+      }
+
+      const globallyIdle = status.state === "idle" || status.target === null || status.target === undefined;
+
+      if (globallyIdle) {
+        const btn = document.createElement("button");
+        btn.textContent = "Start Calibration";
+        btn.addEventListener("click", async () => {
+          const s = await postCommand({ action: "start", target: target });
+          refresh(s);
+        });
+        body.appendChild(btn);
+        return;
+      }
+
+      const isActiveTarget = status.target === target;
+      if (!isActiveTarget) {
+        const msg = document.createElement("p");
+        msg.className = "field-note";
+        msg.textContent = "Another calibration is in progress - finish or cancel it first.";
+        body.appendChild(msg);
+        return;
+      }
+
+      const state = status.state;
+
+      const readingsLine = document.createElement("p");
+      readingsLine.className = "field-note";
+      const parts = [];
+      if (status.first_raw !== null && status.first_raw !== undefined) parts.push(steps.firstLabel + ": " + status.first_raw);
+      if (status.second_raw !== null && status.second_raw !== undefined) parts.push(steps.secondLabel + ": " + status.second_raw);
+      readingsLine.textContent = parts.join("  ·  ");
+      if (parts.length) body.appendChild(readingsLine);
+
+      if (state === "awaiting_first_read") {
+        addActionButton(body, steps.firstLabel, steps.first, target);
+      } else if (state === "awaiting_second_read") {
+        addActionButton(body, steps.secondLabel, steps.second, target);
+      } else if (state === "awaiting_save") {
+        if (target === "light") {
+          const input = document.createElement("input");
+          input.type = "number";
+          input.step = "any";
+          input.placeholder = "Known foot-candle value";
+          input.id = "light-bright-fc-input";
+          body.appendChild(input);
+          body.appendChild(document.createElement("br"));
+          const saveBtn = document.createElement("button");
+          saveBtn.textContent = "Save";
+          saveBtn.addEventListener("click", async () => {
+            const val = document.getElementById("light-bright-fc-input").value;
+            const s = await postCommand({ action: "save", bright_fc: val });
+            refresh(s);
+          });
+          body.appendChild(saveBtn);
+        } else {
+          addActionButton(body, "Save", "save", target);
+        }
+      }
+
+      const cancelBtn = document.createElement("button");
+      cancelBtn.textContent = "Cancel";
+      cancelBtn.className = "cancel-btn";
+      cancelBtn.addEventListener("click", async () => {
+        const s = await postCommand({ action: "cancel" });
+        refresh(s);
+      });
+      body.appendChild(cancelBtn);
+    }
+
+    function addActionButton(body, label, action, target) {
+      const btn = document.createElement("button");
+      btn.textContent = label;
+      btn.addEventListener("click", async () => {
+        btn.disabled = true;
+        btn.textContent = "Reading... (~2s)";
+        const s = await postCommand({ action: action });
+        refresh(s);
+      });
+      body.appendChild(btn);
+    }
+
+    function refresh(status) {
+      renderSection("soil", status);
+      renderSection("light", status);
+    }
+
+    async function loadStatus() {
+      const resp = await fetch("/api/calibration/status");
+      const status = await resp.json();
+      refresh(status);
+    }
+
+    loadStatus();
+
+    // --- Modules calibration passthrough ---
+    // This section has no knowledge of any specific module type's
+    // calibration schema - it renders whatever the module itself
+    // reports via calibration_fields (see docs/ARCHITECTURE.md's
+    // provisional module calibration contract), or falls back to a
+    // generic key/value entry UI if the module hasn't reported any
+    // fields yet (no real module firmware exists to define this yet).
+    const urlParams = new URLSearchParams(window.location.search);
+    const highlightModId = urlParams.get("module");
+
+    function renderModuleCalibration(mod) {
+      const wrapper = document.createElement("div");
+      wrapper.className = "module-cal-card";
+      if (mod.mod_id === highlightModId) wrapper.classList.add("highlighted");
+
+      const header = document.createElement("div");
+      header.className = "module-cal-header";
+      const dot = document.createElement("span");
+      dot.className = "module-dot " + (mod.online ? "online" : "offline");
+      const label = document.createElement("span");
+      label.textContent = (mod.type || "module").replace(/_/g, " ") + " (" + mod.mod_id + ")";
+      header.appendChild(dot);
+      header.appendChild(label);
+      wrapper.appendChild(header);
+
+      if (!mod.online) {
+        const note = document.createElement("p");
+        note.className = "field-note";
+        note.textContent = "Module is offline - reconnect it before calibrating.";
+        wrapper.appendChild(note);
+      }
+
+      const fieldsContainer = document.createElement("div");
+      fieldsContainer.className = "field-grid";
+
+      const fields = mod.calibration_fields || [];
+      if (fields.length > 0) {
+        fields.forEach(f => {
+          const fieldLabel = document.createElement("label");
+          fieldLabel.textContent = f.label || f.key;
+          const input = document.createElement("input");
+          input.type = (f.type === "float" || f.type === "int") ? "number" : "text";
+          if (f.type === "float") input.step = "any";
+          input.dataset.calKey = f.key;
+          fieldLabel.appendChild(input);
+          fieldsContainer.appendChild(fieldLabel);
+        });
+      } else {
+        const note = document.createElement("p");
+        note.className = "field-note";
+        note.textContent = "This module hasn't reported specific calibration fields yet. You can still send raw key/value pairs below.";
+        wrapper.appendChild(note);
+
+        const genericRow = document.createElement("div");
+        genericRow.className = "add-point-row";
+        const keyInput = document.createElement("input");
+        keyInput.placeholder = "key";
+        keyInput.className = "generic-cal-key";
+        const valInput = document.createElement("input");
+        valInput.placeholder = "value";
+        valInput.className = "generic-cal-value";
+        genericRow.appendChild(keyInput);
+        genericRow.appendChild(valInput);
+        wrapper.appendChild(genericRow);
+      }
+
+      wrapper.appendChild(fieldsContainer);
+
+      const sendBtn = document.createElement("button");
+      sendBtn.textContent = "Send Calibration";
+      sendBtn.addEventListener("click", async () => {
+        const params = new URLSearchParams();
+        params.append("mod_id", mod.mod_id);
+
+        if (fields.length > 0) {
+          fieldsContainer.querySelectorAll("input[data-cal-key]").forEach(input => {
+            params.append("cal_" + input.dataset.calKey, input.value);
+          });
+        } else {
+          const k = wrapper.querySelector(".generic-cal-key").value.trim();
+          const v = wrapper.querySelector(".generic-cal-value").value;
+          if (k) params.append("cal_" + k, v);
+        }
+
+        sendBtn.disabled = true;
+        sendBtn.textContent = "Sending...";
+        try {
+          const resp = await fetch("/api/modules/calibrate", {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: params.toString(),
+          });
+          const result = await resp.json();
+          sendBtn.disabled = false;
+          sendBtn.textContent = result.success ? "Sent ✓" : "Failed - " + (result.error || "unknown error");
+        } catch (e) {
+          sendBtn.disabled = false;
+          sendBtn.textContent = "Send Calibration";
+        }
+      });
+      wrapper.appendChild(sendBtn);
+
+      return wrapper;
+    }
+
+    async function loadModulesForCalibration() {
+      const body = document.getElementById("modules-cal-body");
+      try {
+        const resp = await fetch("/api/state");
+        const data = await resp.json();
+        const modules = data.modules || [];
+        body.innerHTML = "";
+        if (modules.length === 0) {
+          const empty = document.createElement("div");
+          empty.className = "modules-empty";
+          empty.textContent = "No modules paired yet.";
+          body.appendChild(empty);
+          return;
+        }
+        modules.forEach(mod => body.appendChild(renderModuleCalibration(mod)));
+      } catch (e) {
+        body.innerHTML = "";
+        const err = document.createElement("p");
+        err.className = "field-note";
+        err.textContent = "Could not load modules.";
+        body.appendChild(err);
+      }
+    }
+
+    loadModulesForCalibration();
+  </script>
+</body>
+</html>

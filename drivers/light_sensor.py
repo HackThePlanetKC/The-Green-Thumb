@@ -59,3 +59,33 @@ class LDRLightSensor:
             return None
         fc = (raw_value - dark_raw) / (bright_raw - dark_raw) * bright_fc
         return max(0, fc)
+
+
+def classify_light_level(raw_value, points):
+    """
+    Multi-point light level mode (config.light_mode.mode == "multi_point",
+    an alternative to the continuous fc calibration above - see
+    docs/ARCHITECTURE.md). Given the current raw reading and a list of
+    user-defined named reference points (each {"label": str, "raw": int},
+    added via the settings page by sampling a live reading while the
+    sensor sits in that condition - e.g. "Direct Sun", "Bright Shade",
+    "Low Light" are examples, not a fixed set; the user names and adds
+    their own), returns the label of whichever point's raw value is
+    closest to the current reading - simple nearest-neighbor
+    classification, no interpolation.
+
+    Returns None if points is empty (nothing configured to classify
+    against) - never fabricates a label. Ties (equidistant from two
+    points) resolve to whichever point appears first in the list - an
+    arbitrary but deterministic and stable choice, not something a user
+    needs to worry about in practice since exact ties on a live ADC
+    reading are effectively never going to happen.
+
+    Pure function, no I/O - deliberately doesn't care how raw_value or
+    points were obtained, so it's usable both for live dashboard display
+    and for testing without any hardware/config dependencies.
+    """
+    if not points:
+        return None
+    closest = min(points, key=lambda p: abs(p["raw"] - raw_value))
+    return closest["label"]

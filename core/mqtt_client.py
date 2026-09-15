@@ -57,6 +57,7 @@ class GreenThumbMqtt:
         on_calibration_command=None,
         on_pairing_command=None,
         on_module_command=None,
+        on_get_light_hours_today=None,
     ):
         """
         cfg: the live config dict (as returned by config.load()). This
@@ -68,6 +69,13 @@ class GreenThumbMqtt:
         callables invoked for command actions OTHER than "set_config"
         (which this module handles directly). on_module_command(mod_id,
         payload) handles module/<mod_id>/command specifically.
+        on_get_light_hours_today: zero-argument callable returning
+        {"light_hours_today": float or None} (see
+        core/light_tracker.py's get_light_hours_today()) - called on
+        {"action": "get_light_hours_today"}, mirroring the web
+        dashboard's on-demand refresh button so HA can request a fresh
+        reading the same way, rather than waiting for the next periodic
+        state publish.
         """
         self._base_id = identity.get_base_id()
         self._cfg = cfg
@@ -75,6 +83,7 @@ class GreenThumbMqtt:
         self._on_calibration_command = on_calibration_command
         self._on_pairing_command = on_pairing_command
         self._on_module_command = on_module_command
+        self._on_get_light_hours_today = on_get_light_hours_today
 
         client_id = "greenthumb-{}".format(self._base_id)
         self._client = MQTTClient(
@@ -112,6 +121,33 @@ class GreenThumbMqtt:
 
     def is_connected(self):
         return self._connected
+
+    def set_broker(self, broker, port, username="", password=""):
+        """
+        Updates broker connection details at runtime and rebuilds the
+        underlying MQTTClient - used by the settings page after saving
+        new broker config, mirroring wifi.py's set_credentials()
+        pattern. Marks disconnected; caller should await connect()
+        immediately after to attempt a live reconnect (same "try it now
+        and report success/failure" UX as the WiFi setup flow), and
+        reconnect_forever() (if running as a background task) will also
+        pick up the new settings on its next attempt regardless.
+        """
+        try:
+            self._client.disconnect()
+        except OSError:
+            pass  # old client may never have connected in the first place - not an error worth surfacing here
+
+        client_id = "greenthumb-{}".format(self._base_id)
+        self._client = MQTTClient(
+            client_id, broker, port=port,
+            user=username or None, password=password or None,
+            keepalive=60,
+        )
+        self._client.set_last_will(self._topic("status"), b"offline", retain=True, qos=1)
+        self._client.set_callback(self._on_message)
+        self._connected = False
+        self._backoff_s = 1
 
     async def reconnect_forever(self):
         """
@@ -163,6 +199,15 @@ class GreenThumbMqtt:
     def publish_light_summary(self, summary_dict):
         self._publish_json("light_summary", summary_dict, retain=True)
 
+    def publish_light_hours_today(self, data_dict):
+        """
+        Published on-demand in response to {"action": "get_light_hours_today"}
+        (see __init__'s on_get_light_hours_today) - retained so a
+        newly-subscribing HA sensor immediately sees the last requested
+        value rather than "unavailable" until the next request.
+        """
+        self._publish_json("light_hours_today", data_dict, retain=True)
+
     def publish_calibration_status(self, status_dict):
         self._publish_json("calibration/status", status_dict, retain=True)
 
@@ -208,8 +253,16 @@ class GreenThumbMqtt:
         action = payload.get("action")
         if action == "set_config":
             self._handle_set_config(payload)
+        elif action == "get_light_hours_today":
+            self._handle_get_light_hours_today()
         elif self._on_command:
             self._on_command(payload)
+
+    def _handle_get_light_hours_today(self):
+        if self._on_get_light_hours_today is None:
+            return  # no light_tracker wired up yet (main.py doesn't exist) - silently no-op, same as any unhandled command
+        data = self._on_get_light_hours_today()
+        self.publish_light_hours_today(data)
 
     def _handle_set_config(self, payload):
         path = payload.get("path")

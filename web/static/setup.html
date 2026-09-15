@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Green Thumb Setup</title>
+  <link rel="stylesheet" href="/style.css">
+  <script>
+    (function() {
+      const stored = localStorage.getItem("greenthumb-theme");
+      const prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+      document.documentElement.setAttribute("data-theme", stored || (prefersDark ? "dark" : "light"));
+    })();
+  </script>
+</head>
+<body>
+  <button class="theme-toggle" id="theme-toggle" title="Toggle dark mode">🌙</button>
+  <div class="card">
+    <h1>Green Thumb Setup</h1>
+    <p>Enter your WiFi network details to connect this device to your home network.</p>
+    <form method="POST" action="/save">
+      <label for="ssid">Network Name (SSID)</label>
+      <input type="text" id="ssid" name="ssid" required autocomplete="off">
+      <label for="password">Password</label>
+      <input type="password" id="password" name="password" autocomplete="off">
+      <button type="submit">Connect</button>
+    </form>
+  </div>
+
+  <script>
+    document.addEventListener("DOMContentLoaded", () => {
+      const btn = document.getElementById("theme-toggle");
+      const current = document.documentElement.getAttribute("data-theme");
+      btn.textContent = current === "dark" ? "☀️" : "🌙";
+      btn.addEventListener("click", () => {
+        const now = document.documentElement.getAttribute("data-theme");
+        const next = now === "dark" ? "light" : "dark";
+        document.documentElement.setAttribute("data-theme", next);
+        localStorage.setItem("greenthumb-theme", next);
+        btn.textContent = next === "dark" ? "☀️" : "🌙";
+      });
+    });
+  </script>
+</body>
+</html>

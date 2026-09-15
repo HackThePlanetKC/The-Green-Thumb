@@ -16,6 +16,7 @@ CONFIG_PATH = "/config.json"
 # explicitly flagged null where no sourced value exists yet. Do not fill
 # in a null with a guessed number here - set it via config once sourced.
 DEFAULT_CONFIG = {
+    "device_name": "Green Thumb",  # user-configurable, editable from the dashboard - see web/server.py
     "wifi": {
         "ssid": "",
         "password": "",
@@ -77,7 +78,12 @@ DEFAULT_CONFIG = {
     "light_tracking": {
         "present_threshold_fc": 75,
         "hours_target": {"min": 12, "max": 16},
-        "high_intensity_hours_target": {"max": None},  # blocked on light_fc.red_max
+        "high_intensity_hours_target": {"min": None, "max": None},
+        # Optional, non-essential: some plants need a minimum amount of
+        # direct/high-intensity light per day (min), and/or benefit from
+        # a cap on it (max). Only becomes meaningful once thresholds.light_fc.red_max
+        # is also set (that's what defines "high-intensity" in the first
+        # place) - see core/light_tracker.py's evaluation logic.
     },
     "soil_calibration": {
         "dry_raw": None,
@@ -99,6 +105,27 @@ DEFAULT_CONFIG = {
         # ~5% of the 0-65535 read_u16() range. Retune once the sensor is
         # characterized.
         "min_delta_raw": 3277,
+    },
+    "light_mode": {
+        # "single": one continuous fc value via the 2-point dark/bright
+        # calibration above (existing behavior).
+        # "multi_point": instead of/alongside a continuous fc value, the
+        # user samples named reference points (e.g. "Direct Sun",
+        # "Bright Shade", "Low Light" - these are examples, not a fixed
+        # list; the user names and adds their own). At runtime, the
+        # dashboard shows a "Light Level" label for whichever configured
+        # point's raw reading is closest to the current live reading -
+        # nearest-neighbor classification, see
+        # drivers/light_sensor.py's classify_light_level().
+        #
+        # Per-category daily duration tracking (e.g. "3h in direct sun
+        # today") is NOT implemented here - deliberately out of scope
+        # for the base device. Flagged as a future HACS integration
+        # roadmap item instead (see README.md) - HA has far more room
+        # for that kind of historical/statistical tracking than this
+        # device does.
+        "mode": "single",
+        "points": [],  # list of {"label": str, "raw": int}, user-defined, any number
     },
     "profile_name": "generic_houseplant",
 }

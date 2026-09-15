@@ -34,6 +34,8 @@ Most plant monitors either dump raw numbers with no interpretation, or lock you 
 
 Units throughout: °F and foot-candles.
 
+Wiring diagram and pin assignments: [`docs/BUILD.md`](docs/BUILD.md#hardware).
+
 ## How it fits together
 
 ```
@@ -52,9 +54,9 @@ Units throughout: °F and foot-candles.
 
 Modules never touch WiFi or Home Assistant directly — the base is the only gateway. This keeps the network surface small and means a module can be designed, built, and paired without ever modifying base firmware.
 
-## Status: early build, architecture complete
+## Status: base firmware complete, HACS integration and first module next
 
-All core design decisions — MQTT topic structure, health-threshold logic, calibration flows, BLE pairing and GATT schema — are finalized. Firmware implementation is in progress, driver-by-driver. Full technical detail: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+All core design decisions — MQTT topic structure, health-threshold logic, calibration flows, BLE pairing and GATT schema — are finalized, every planned driver and `/core/` module is built and tested, `main.py`/`boot.py` wire everything together into a running device, and the full web portal (setup, dashboard, settings, calibration, pairing) is complete. What's left: the HACS integration, verifying the confirmed GPIO pin map by actually wiring and powering a physical board, and the first BLE peripheral module (watering pump, deferred until the base is fully finalized). Full technical detail: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). Build/flash/setup instructions, including a wiring diagram: [`docs/BUILD.md`](docs/BUILD.md).
 
 ### Done
 - [x] Full architecture spec (MQTT topics, timing, thresholds, calibration & pairing state machines, BLE GATT schema)
@@ -63,27 +65,44 @@ All core design decisions — MQTT topic structure, health-threshold logic, cali
 - [x] `drivers/dht11.py` — temperature/humidity
 - [x] `drivers/soil_moisture.py` — soil moisture with two-point calibration
 - [x] `drivers/light_sensor.py` — LDR light level (placeholder calibration pending a lux reference)
-
-### In progress / up next
 - [x] `drivers/display.py` — OLED screen cycling + night mode
-- [x] `drivers/status_led.py` — WS2812 health colors + pairing indicator
+- [x] `drivers/status_led.py` — WS2812 health colors + pairing indicator + boot animation
 - [x] `drivers/button.py` — short/long press handling
 - [x] `core/wifi.py`, `core/identity.py` — connectivity & base_id derivation
 - [x] `core/ntp.py` — time sync
 - [x] `core/mqtt_client.py` — topic builder, pub/sub wrapper, LWT
 - [x] `core/health.py` — green/yellow/red calculation
-- [ ] `core/light_tracker.py` — daily light-hours accumulator
-- [ ] `core/calibration.py` — soil/light calibration state machine
-- [ ] `core/pairing.py`, `core/ble_central.py`, `core/module_manager.py` — BLE module support
-- [ ] `main.py` / `boot.py` — asyncio task orchestration
-- [ ] `web/` — standalone portal for non-HA users
+- [x] `core/light_tracker.py` — daily light-hours accumulator
+- [x] `core/calibration.py` — soil/light calibration state machine
+- [x] `core/pairing.py` — pairing state machine
+- [x] `core/ble_central.py` — scan/connect/GATT primitives (see caveats in docs/ARCHITECTURE.md)
+- [x] `core/module_manager.py` — registry + BLE↔MQTT relay for paired modules
+- [x] `web/` — full surface complete: WiFi setup, dashboard, settings, calibration, pairing
+- [x] `tools/build_mpy.sh` — precompiles source to .mpy bytecode
+- [x] `docs/BUILD.md` — build/flash/setup instructions (kept current with each new user-facing step)
+- [x] `main.py` / `boot.py` — asyncio task orchestration, wiring everything above together
+- [x] GPIO pin map (`pins.py`) — confirmed against a physical board photo (ACEIRMC ESP32-C3 Super Mini)
+
+### Remaining
+
 - [ ] Custom HACS integration (separate repo/component)
-- [ ] First BLE peripheral module: watering pump
-- [ ] GPIO pin map finalization
+- [ ] HACS integration: track time spent at each configured light level (e.g. "3h in Direct Sun today") over the day - the base device only shows the *current* closest-matching light level (see the dashboard's Light Level badge), deliberately not per-category duration; HA has far more room for that kind of historical/statistical tracking than this device does.
+- [ ] First BLE peripheral module: watering pump — **deferred until after the base device is finalized.** The base's module integration points (BLE GATT schema, `ble_central.py`, `module_manager.py`, `pairing.py`, display module screens, dashboard Modules section, MQTT `module/<mod_id>/*` topics) stay stable and working in the meantime, since modules will connect through them once this resumes.
 - [ ] Light sensor real-world calibration (needs a lux reference)
 - [ ] High-intensity/sunburn light thresholds (`light_fc.red_min`/`red_max`) — no sourced data yet
 - [ ] Idle animations and user-selectable color options for the status LED — deferred, decide later
 - [ ] Additional button press combinations, or a second physical button — deferred, decide later
+
+## Dashboard
+
+The standalone web dashboard (served directly from the device, no Home Assistant required) shows live health status and sensor readings, and a few things worth calling out:
+
+- **Editable device name** — rename your plant/device right from the dashboard, no separate settings page needed.
+- **Reserved space for modules** — once a BLE module (watering pump, grow light, etc.) is paired, it shows up here automatically, with a "Calibrate" link that flags itself (⚠) if the module reports needing calibration.
+- **"Light Today"** shows cumulative light exposure for the day (e.g. "13h 15m") against your target range, instead of a raw instantaneous reading. It's static on load with a manual refresh button, and the same on-demand refresh is available to Home Assistant via MQTT — so you're not stuck waiting on a periodic publish cycle to get a current number.
+- **"Light Level"** (optional) — instead of a raw foot-candle number, you can sample named reference points (e.g. "Direct Sun," "Bright Shade," "Low Light" — name them however makes sense for your plant setup) and the dashboard shows whichever one the current reading is closest to. Off by default; enable it under Settings → advanced.
+- **Dark mode**, following your system preference by default, with a manual toggle that's remembered on that browser.
+- **Module calibration is a passthrough** — the base doesn't know or care what any given module type needs calibrated. Each module reports its own requirements (or none), and the calibration page renders whatever it asks for; the base just relays values back to it.
 
 ## Design principles
 
