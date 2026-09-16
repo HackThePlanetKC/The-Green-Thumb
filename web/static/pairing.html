@@ -79,6 +79,11 @@
         p.textContent = "No pairing in progress.";
         body.appendChild(p);
 
+        const warning = document.createElement("p");
+        warning.className = "field-note";
+        warning.textContent = "Pair modules one at a time. If you have more than one base station, avoid running pairing on multiple bases at once too — they can see the same advertising module and both attempt to connect to it.";
+        body.appendChild(warning);
+
         const btn = document.createElement("button");
         btn.textContent = "Start Pairing (60s scan)";
         btn.addEventListener("click", async () => {
@@ -136,6 +141,40 @@
         p.className = "success";
         p.textContent = "Paired! " + (status.type || "module").replace(/_/g, " ") + " (ID: " + status.mod_id + ")";
         body.appendChild(p);
+
+        const nameRow = document.createElement("div");
+        nameRow.className = "add-point-row";
+        const nameInput = document.createElement("input");
+        nameInput.type = "text";
+        nameInput.placeholder = "Custom name (optional)";
+        nameInput.maxLength = 40;
+        const nameBtn = document.createElement("button");
+        nameBtn.textContent = "Set Name";
+        nameBtn.addEventListener("click", async () => {
+          const name = nameInput.value.trim();
+          if (!name) return;
+          nameBtn.disabled = true;
+          nameBtn.textContent = "Setting...";
+          try {
+            const params = new URLSearchParams();
+            params.append("mod_id", status.mod_id);
+            params.append("name", name);
+            const resp = await fetch("/api/modules/set_name", {
+              method: "POST",
+              headers: { "Content-Type": "application/x-www-form-urlencoded" },
+              body: params.toString(),
+            });
+            const result = await resp.json();
+            nameBtn.disabled = false;
+            nameBtn.textContent = result.success ? "Set ✓" : "Failed - " + (result.error || "unknown error");
+          } catch (e) {
+            nameBtn.disabled = false;
+            nameBtn.textContent = "Set Name";
+          }
+        });
+        nameRow.appendChild(nameInput);
+        nameRow.appendChild(nameBtn);
+        body.appendChild(nameRow);
 
         const checkingNote = document.createElement("p");
         checkingNote.className = "field-note";

@@ -428,6 +428,8 @@ class WebServer:
             await self._handle_pairing_command_route(writer, body)
         elif path == "/api/modules/calibrate":
             await self._handle_modules_calibrate(writer, body)
+        elif path == "/api/modules/set_name":
+            await self._handle_modules_set_name(writer, body)
         else:
             await self._send_response(writer, 404, "text/plain", b"Not Found")
 
@@ -833,6 +835,41 @@ class WebServer:
 
         payload = {"action": "set_calibration", "values": values}
         success = await self._module_manager.send_command(mod_id, payload)
+
+        result = {"success": success}
+        if not success:
+            result["error"] = "module not currently connected"
+        await self._send_response(writer, 200, "application/json", json.dumps(result).encode())
+
+    async def _handle_modules_set_name(self, writer, body):
+        """
+        Lets the user push a custom name to a module - offered on the
+        pairing page's post-pairing screen (see docs/ARCHITECTURE.md),
+        optional ("if they want to"). Uses the SAME {"action": "set_name",
+        "value": ...} Command action module_manager.py's own automatic
+        collision-disambiguation push uses, so a module only needs one
+        handler to cover both cases. This route doesn't touch
+        module_manager's cache itself - if the module adopts the name,
+        it reports it back via its own next State update, same as any
+        other module-owned field (see the provisional module development
+        contract).
+        """
+        fields = parse_form_body(body)
+        mod_id = fields.get("mod_id", "").strip()
+        name = fields.get("name", "").strip()
+
+        if not mod_id or not name:
+            result = {"success": False, "error": "mod_id and name are both required"}
+            await self._send_response(writer, 400, "application/json", json.dumps(result).encode())
+            return
+
+        if self._module_manager is None:
+            result = {"success": False, "error": "module support not available"}
+            await self._send_response(writer, 503, "application/json", json.dumps(result).encode())
+            return
+
+        name = name[:40]
+        success = await self._module_manager.send_command(mod_id, {"action": "set_name", "value": name})
 
         result = {"success": success}
         if not success:

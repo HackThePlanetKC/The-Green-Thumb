@@ -228,17 +228,29 @@ async def main():
 
     def _build_module_summary(mod_id):
         """
-        needs_calibration/calibration_fields are provisional, module-
-        defined (see docs/ARCHITECTURE.md) - main.py doesn't interpret
-        them, just passes through whatever the module's own State JSON
-        reports, defaulting gracefully if the module hasn't sent any
-        state yet (get_last_state() returns None right after pairing,
-        before relay_forever() has connected - see that method's docstring).
+        needs_calibration/calibration_fields/name/description/
+        config_required/config_options/data_sources are all provisional,
+        module-defined (see docs/ARCHITECTURE.md's module development
+        spec) - main.py doesn't interpret any of them, just passes
+        through whatever the module's own State JSON reports, defaulting
+        gracefully if the module hasn't sent any state yet
+        (get_last_state() returns None right after pairing, before
+        relay_forever() has connected - see that method's docstring).
+
+        "type" is the one exception - it comes from the Device Type GATT
+        characteristic read during pairing (see module_manager.register),
+        not from State, so it's always available even before the module
+        has sent its first State notification.
         """
         last_state = module_mgr.get_last_state(mod_id) or {}
         return {
             "mod_id": mod_id,
             "type": module_mgr.get_by_mod_id(mod_id)["type"],
+            "name": last_state.get("name"),
+            "description": last_state.get("description"),
+            "config_required": bool(last_state.get("config_required")),
+            "config_options": last_state.get("config_options", []),
+            "data_sources": last_state.get("data_sources", []),
             "online": module_mgr.is_module_online(mod_id),
             "needs_calibration": bool(last_state.get("needs_calibration")),
             "calibration_fields": last_state.get("calibration_fields", []),
@@ -406,7 +418,12 @@ async def main():
                     led.set_wifi_connecting(True)
                     success = await wifi_mgr.connect_sta()
                     led.set_wifi_connecting(False)
-                    if not success:
+                    if success:
+                        # No-op if "setup" was never added (already-configured
+                        # device connecting normally) - only actually removes
+                        # anything when this follows a fresh setup-mode exit.
+                        disp.remove_screen("setup")
+                    else:
                         await asyncio.sleep(wifi_mgr.next_backoff_s())
                         continue
             await asyncio.sleep(5)
@@ -444,7 +461,21 @@ async def main():
     asyncio.create_task(pairing_status_loop())
 
     if _setup_mode_requested or not wifi_mgr.has_credentials():
-        wifi_mgr.start_ap()
+        ap_ssid = wifi_mgr.start_ap()
+
+        def _screen_setup(d):
+            # ap_ssid ("GreenThumb-Setup-<base_id>") is 23 chars - longer
+            # than draw_screen's 16-char-per-line limit, so it's wrapped
+            # across two lines rather than truncated. Truncating would cut
+            # off the base_id suffix, the one part that actually tells
+            # apart two Green Thumb devices both in setup mode - losing
+            # exactly the information this screen exists to show.
+            d.draw_screen(
+                icons.ICON_WIFI, "WiFi Setup",
+                ["Connect to:", ap_ssid[:16], ap_ssid[16:], "Then visit:", wifi.AP_IP],
+            )
+
+        disp.add_screen("setup", _screen_setup)
 
     await web.start()
 

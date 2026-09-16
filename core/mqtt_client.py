@@ -40,6 +40,7 @@ from umqtt.simple import MQTTClient
 
 import config as config_module
 import identity
+import version
 
 TOPIC_PREFIX = "greenthumb"
 _MAX_BACKOFF_S = 60
@@ -118,6 +119,7 @@ class GreenThumbMqtt:
         self._client.subscribe(self._topic("pairing/command"), qos=1)
         self._client.subscribe(self._topic("module/+/command"), qos=1)
         self.publish_config()
+        self.publish_device_info(self._cfg.get("device_name"))
 
     def is_connected(self):
         return self._connected
@@ -195,6 +197,28 @@ class GreenThumbMqtt:
     def publish_config(self):
         """Publishes the full current config as the retained config topic."""
         self._publish_json("config", self._cfg, retain=True)
+
+    def publish_device_info(self, device_name):
+        """
+        Retained "who am I" topic (version, device_name, base_id) -
+        kept separate from publish_config()'s mutable settings dump,
+        since this reflects fixed-per-boot facts about the running
+        firmware/device identity, not something the user edits via
+        set_config. Published once at connect, same point config
+        already is.
+
+        Exists specifically so a future HACS integration has a
+        sw_version to put in the device registry entry - nothing
+        previously published the BASE's own firmware version anywhere
+        (only BLE modules had one, via the Firmware Version GATT
+        characteristic - see ble_central.py). See version.py and
+        docs/ARCHITECTURE.md.
+        """
+        self._publish_json("device_info", {
+            "version": version.VERSION,
+            "device_name": device_name,
+            "base_id": self._base_id,
+        }, retain=True)
 
     def publish_light_summary(self, summary_dict):
         self._publish_json("light_summary", summary_dict, retain=True)

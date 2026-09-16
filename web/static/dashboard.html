@@ -116,7 +116,7 @@
         const dot = document.createElement("span");
         dot.className = "module-dot " + (m.online ? "online" : "offline");
         const label = document.createElement("span");
-        label.textContent = (m.type || "module").replace(/_/g, " ");
+        label.textContent = m.name || (m.type || "module").replace(/_/g, " ");
         card.appendChild(dot);
         card.appendChild(label);
 

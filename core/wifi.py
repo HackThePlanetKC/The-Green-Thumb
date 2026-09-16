@@ -30,6 +30,12 @@ import network
 import identity
 
 AP_SSID_PREFIX = "GreenThumb-Setup-"
+
+# The ESP32/MicroPython AP interface's default gateway IP - this module
+# never reconfigures it (start_ap() only sets essid/authmode below), so
+# it stays at this default. Exposed as an explicit constant rather than
+# left as an implicit assumption scattered across docs/display code.
+AP_IP = "192.168.4.1"
 _MAX_BACKOFF_S = 60
 
 

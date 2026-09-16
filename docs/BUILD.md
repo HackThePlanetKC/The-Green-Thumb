@@ -30,7 +30,7 @@ See [`README.md`](../README.md#hardware-base-station) for the current parts list
 ./tools/build_mpy.sh
 ```
 
-Produces a `build/` directory mirroring the source tree, with `core/`, `drivers/`, `web/server.py`, and `pins.py` compiled to `.mpy` bytecode. `boot.py`/`main.py` are copied unchanged as plain `.py` (tiny bootstrap entry points, easier to debug/patch live via the REPL without recompiling), and `web/static/*` (not Python) is copied unchanged too. Requires `mpy-cross` on your `PATH`; the script fails with a clear error if it's missing rather than silently skipping compilation.
+Produces a `build/` directory mirroring the source tree, with `core/`, `drivers/`, `web/server.py`, `pins.py`, and `version.py` compiled to `.mpy` bytecode. `boot.py`/`main.py` are copied unchanged as plain `.py` (tiny bootstrap entry points, easier to debug/patch live via the REPL without recompiling), and `web/static/*` (not Python) is copied unchanged too. Requires `mpy-cross` on your `PATH`; the script fails with a clear error if it's missing rather than silently skipping compilation.
 
 ## Copying files to the device
 
@@ -40,7 +40,7 @@ Use [`mpremote`](https://docs.micropython.org/en/latest/reference/mpremote.html)
 
 **Wired together in `main.py` and verified with a mocked-hardware smoke test (see `docs/ARCHITECTURE.md`) - not yet verified on real physical hardware.** The flow below is what the code actually does, not just a documented intent.
 
-1. On first boot (no WiFi credentials saved yet), the device starts an open access point named `GreenThumb-Setup-<ID>`.
+1. On first boot (no WiFi credentials saved yet), the device starts an open access point named `GreenThumb-Setup-<ID>` - the OLED display shows this SSID and the address to visit directly, so you don't need to look either up.
 2. Connect to that network from a phone/laptop, and a captive-portal-style setup page should load (or navigate to `http://192.168.4.1/` manually).
 3. Enter your home WiFi network name and password. The device saves them and attempts to connect immediately, showing success/failure without needing a reboot.
 4. Once connected, the device's dashboard is reachable at its new IP address on your home network (check your router's client list, or the setup page's success message if it's still open).

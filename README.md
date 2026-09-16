@@ -80,7 +80,8 @@ All core design decisions — MQTT topic structure, health-threshold logic, cali
 - [x] `web/` — full surface complete: WiFi setup, dashboard, settings, calibration, pairing
 - [x] `tools/build_mpy.sh` — precompiles source to .mpy bytecode
 - [x] `docs/BUILD.md` — build/flash/setup instructions (kept current with each new user-facing step)
-- [x] `main.py` / `boot.py` — asyncio task orchestration, wiring everything above together
+- [x] `main.py` / `boot.py` — asyncio task orchestration, wiring everything above together (`boot.py` also sets up `sys.path` for cross-directory imports — a real bug where this was silently missing was caught and fixed, see `docs/ARCHITECTURE.md`)
+- [x] `version.py` — firmware semver, published to MQTT/HA as `device_info` (gives the future HACS integration a `sw_version`)
 - [x] GPIO pin map (`pins.py`) — confirmed against a physical board photo (ACEIRMC ESP32-C3 Super Mini)
 
 ### Remaining
@@ -103,6 +104,25 @@ The standalone web dashboard (served directly from the device, no Home Assistant
 - **"Light Level"** (optional) — instead of a raw foot-candle number, you can sample named reference points (e.g. "Direct Sun," "Bright Shade," "Low Light" — name them however makes sense for your plant setup) and the dashboard shows whichever one the current reading is closest to. Off by default; enable it under Settings → advanced.
 - **Dark mode**, following your system preference by default, with a manual toggle that's remembered on that browser.
 - **Module calibration is a passthrough** — the base doesn't know or care what any given module type needs calibrated. Each module reports its own requirements (or none), and the calibration page renders whatever it asks for; the base just relays values back to it.
+
+## Future module development
+
+Modules are open-ended and not designed yet (the first, a watering pump, is deferred until the base is fully finalized), but the base's side of the contract is already built: modules report themselves over BLE, the base relays everything through to MQTT/HA/dashboard as a pure passthrough — it never interprets or hardcodes knowledge of any specific module type. Whatever you build just needs to report:
+
+| Field | Type | Notes |
+|---|---|---|
+| **Name** | string | The module's own display name (e.g. "Tomato Pump"). Module-reported by default, but user-editable during pairing/setup (see below) — falls back to a formatted version of Type if never set either way. |
+| **Type** | string | A generic category — `light`, `water`, `soil`, `misc`, etc. Examples, not a fixed enum; add new categories as needed. |
+| **Short description** | string | A one-line summary of what the module does. |
+| **Config required?** | bool | Whether this module needs user configuration before it's usable. |
+| **Config options** | list, if required | What to configure — key/label/type per option, rendered as a generic form on the calibration page if the module doesn't supply anything richer. |
+| **N data sources** | list | What data streams the module provides — key/label/unit per source. |
+
+Each paired module stays associated with the specific base it's connected to — MQTT topics are already namespaced per-base (`greenthumb/<base_id>/module/<mod_id>/...`), so nothing extra is needed to keep, say, Base 1's pump from mixing with Base 2's pump.
+
+**Handle the `set_name` action — Name is user-editable during setup, and auto-disambiguated on collision.** The pairing page lets the user optionally set a custom Name for a module right after it pairs. Separately, if two modules of the same type end up reporting the same default Name (two "Water Pump"s, say), the base automatically disambiguates on first connect by appending a number to whichever one connected second — `"Water Pump"` stays as-is, the next one becomes `"Water Pump 2"`, then `"Water Pump 3"`, and so on. Both cases push the result to the module the same way: `{"action": "set_name", "value": "..."}` over the same Command channel calibration values already use. Your module just needs one handler for this action, and should report back whatever name it adopted via its next State update — that's the only way the base knows the push was accepted.
+
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full technical contract (exact JSON shape, the multi-base-station design notes, and what the future HACS integration needs to do to group modules under their base in Home Assistant).
 
 ## Design principles
 

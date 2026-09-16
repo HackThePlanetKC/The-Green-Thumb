@@ -146,6 +146,52 @@ class ModuleManager:
         """
         return self._last_state.get(mod_id)
 
+    def _resolve_name_collision(self, mod_id, state_dict):
+        """
+        Called once, on a module's FIRST-ever State report (see on_state
+        above) - checks its self-reported "name" against every OTHER
+        currently-known module's cached name, and if it collides
+        exactly, pushes a disambiguated name ("Water Pump 2", "Water
+        Pump 3", ...) back to the module via the same generic Command
+        channel calibration values use - {"action": "set_name", "value": ...}.
+        Only ever runs at first-contact, not on every subsequent state
+        update, so it can't fight a name the user (or the module itself)
+        deliberately changes later - see docs/ARCHITECTURE.md.
+
+        A module that adopts the pushed name is expected to report it
+        back via its own State "name" field on its next update - this
+        method doesn't update self._last_state itself, since it has no
+        way to know whether the module actually accepted the push.
+        """
+        name = state_dict.get("name")
+        if not name:
+            return  # nothing to disambiguate if the module didn't report a name at all
+
+        other_names = {
+            other_id: (other_state or {}).get("name")
+            for other_id, other_state in self._last_state.items()
+            if other_id != mod_id
+        }
+        if name not in other_names.values():
+            return  # no collision, nothing to do
+
+        suffix = 2
+        while "{} {}".format(name, suffix) in other_names.values():
+            suffix += 1
+        disambiguated = "{} {}".format(name, suffix)
+
+        # Optimistically update the cache immediately, before the module
+        # has confirmed adopting the pushed name - closes a real race
+        # window where a second AND third module connecting in quick
+        # succession (both still seeing the same stale, not-yet-
+        # disambiguated cached name for the other) could otherwise both
+        # be pushed the identical disambiguated name, still colliding.
+        # Self-corrects if the module's actual next report differs (e.g.
+        # it ignored the push) - this is a cache update, not a republish.
+        self._last_state[mod_id]["name"] = disambiguated
+
+        asyncio.create_task(self.send_command(mod_id, {"action": "set_name", "value": disambiguated}))
+
     def get_by_mod_id(self, mod_id):
         """Returns the registry entry (dict with address/type/mod_id) for a mod_id, or None."""
         for entry in self._registry.values():
@@ -201,8 +247,12 @@ class ModuleManager:
                 self._mqtt.publish_module_status(mod_id, online=True)
 
                 def on_state(state_dict):
+                    is_first_report = mod_id not in self._last_state
                     self._last_state[mod_id] = state_dict
                     self._mqtt.publish_module_state(mod_id, state_dict)
+
+                    if is_first_report:
+                        self._resolve_name_collision(mod_id, state_dict)
 
                 await connection.subscribe_state(on_state)
             except OSError:

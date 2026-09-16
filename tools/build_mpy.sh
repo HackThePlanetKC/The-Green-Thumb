@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # tools/build_mpy.sh - Precompiles core/ and drivers/ (and web/server.py,
-# pins.py) to .mpy bytecode via mpy-cross, mirroring the source directory
+# pins.py, version.py) to .mpy bytecode via mpy-cross, mirroring the source directory
 # structure into build/.
 #
 # WHY: raw .py source costs more flash space and more RAM/time at import
@@ -85,6 +85,10 @@ mpy-cross "$REPO_ROOT/web/server.py" -o "$BUILD_DIR/web/server.mpy"
 echo ""
 echo "Compiling pins.py ..."
 mpy-cross "$REPO_ROOT/pins.py" -o "$BUILD_DIR/pins.mpy"
+
+echo ""
+echo "Compiling version.py ..."
+mpy-cross "$REPO_ROOT/version.py" -o "$BUILD_DIR/version.mpy"
 
 echo ""
 echo "Copying non-Python files as-is (boot.py, main.py, web/static/, etc.) ..."
