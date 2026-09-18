@@ -37,6 +37,10 @@
     </div>
     <ul class="reasons" id="reasons"></ul>
 
+    <div id="sensor-alerts-section" class="sensor-alerts-section" style="display:none;">
+      <div id="sensor-alerts-list"></div>
+    </div>
+
     <div class="readings">
       <div class="reading">
         <div class="reading-label">Temperature</div>
@@ -94,10 +98,93 @@
   </script>
 
   <script>
-    const HEALTH_COLORS = { green: "#2e7d32", yellow: "#f9a825", red: "#c62828" };
+    const DEFAULT_HEALTH_COLORS = { green: "#2e7d32", yellow: "#f9a825", red: "#c62828" };
+    // Matches main.py's _COLORBLIND_HEALTH_COLORS RGB tuple exactly
+    // (0,120,255)/(255,180,0)/(255,140,0) - kept consistent by hand
+    // since the two surfaces don't share code, not by import.
+    const COLORBLIND_HEALTH_COLORS = { green: "#0078ff", yellow: "#f9a825", red: "#ff8c00" };
+
+    function rgbArrayToHex(rgb) {
+      return "#" + rgb.map(c => c.toString(16).padStart(2, "0")).join("");
+    }
+
+    function resolveHealthColors(colorScheme) {
+      const scheme = (colorScheme && colorScheme.web_portal) || "default";
+      if (scheme === "colorblind") return COLORBLIND_HEALTH_COLORS;
+      if (scheme === "custom" && colorScheme.custom_colors && colorScheme.custom_colors.green) {
+        const c = colorScheme.custom_colors;
+        return { green: rgbArrayToHex(c.green), yellow: rgbArrayToHex(c.yellow), red: rgbArrayToHex(c.red) };
+      }
+      return DEFAULT_HEALTH_COLORS;
+    }
 
     function fmt(value, unit) {
       return (value === null || value === undefined) ? "—" : value + unit;
+    }
+
+    function fmtTemp(tempF, unit) {
+      // Display-only conversion, mirrors main.py's _format_temp exactly -
+      // thresholds/config always stay in °F regardless of this toggle,
+      // see docs/ARCHITECTURE.md.
+      if (tempF === null || tempF === undefined) return "—";
+      if (unit === "C") return Math.round((tempF - 32) * 5 / 9) + "°C";
+      return Math.round(tempF) + "°F";
+    }
+
+    async function dismissSensorAlert(sensorKey) {
+      try {
+        await fetch("/api/dismiss_sensor_alert", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: "sensor=" + encodeURIComponent(sensorKey),
+        });
+        refresh(); // re-fetch so the dismissed state shows immediately
+      } catch (e) { /* leave as-is, user can retry */ }
+    }
+
+    function formatSensorName(key) {
+      return key.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+    }
+
+    function renderSensorAlerts(alerts) {
+      const section = document.getElementById("sensor-alerts-section");
+      const list = document.getElementById("sensor-alerts-list");
+      list.innerHTML = "";
+
+      if (alerts.length === 0) {
+        section.style.display = "none";
+        return;
+      }
+      section.style.display = "";
+
+      alerts.forEach(alert => {
+        const box = document.createElement("div");
+        box.className = "sensor-alert-box" + (alert.tier === "notify" ? " tier-notify" : " tier-alert");
+
+        const isCombined = alert.sensor === "multiple";
+        const names = isCombined ? alert.sensors.map(formatSensorName).join(", ") : formatSensorName(alert.sensor);
+
+        const label = document.createElement("div");
+        label.className = "sensor-alert-label";
+        const hours = Math.floor(alert.duration_s / 3600);
+        const mins = Math.floor((alert.duration_s % 3600) / 60);
+        label.textContent = names + " — failing " + hours + "h " + mins + "m" + (alert.dismissed ? " (dismissed)" : "");
+        box.appendChild(label);
+
+        // Per-sensor dismiss buttons - even for a combined entry, dismissal
+        // is always scoped to one real underlying sensor key, never the
+        // "multiple" placeholder itself (see docs/ARCHITECTURE.md).
+        const sensorKeys = isCombined ? alert.sensors : [alert.sensor];
+        sensorKeys.forEach(key => {
+          const btn = document.createElement("button");
+          btn.className = "dismiss-btn";
+          btn.textContent = "Dismiss " + (isCombined ? formatSensorName(key) : "");
+          btn.addEventListener("click", () => dismissSensorAlert(key));
+          box.appendChild(btn);
+        });
+
+        list.appendChild(box);
+      });
     }
 
     function renderModules(modules) {
@@ -145,15 +232,16 @@
         document.getElementById("device-name").textContent = data.device_name || "Green Thumb";
       }
 
-      document.getElementById("temp").textContent = fmt(data.temp_f, "°F");
+      document.getElementById("temp").textContent = fmtTemp(data.temp_f, data.temp_unit);
       document.getElementById("humidity").textContent = fmt(data.humidity_pct, "%");
       document.getElementById("soil").textContent = fmt(data.soil_moisture_pct, "%");
 
       const status = data.health && data.health.status;
       const badge = document.getElementById("health-badge");
       const statusEl = document.getElementById("health-status");
-      if (status && HEALTH_COLORS[status]) {
-        badge.style.backgroundColor = HEALTH_COLORS[status];
+      const healthColors = resolveHealthColors(data.color_scheme);
+      if (status && healthColors[status]) {
+        badge.style.backgroundColor = healthColors[status];
         statusEl.textContent = status.charAt(0).toUpperCase() + status.slice(1);
       } else {
         badge.style.backgroundColor = "#999";
@@ -170,6 +258,8 @@
       });
 
       renderModules(data.modules);
+
+      renderSensorAlerts(data.sensor_alerts || []);
 
       const lightLevelRow = document.getElementById("light-level-row");
       if (data.light_level_label) {

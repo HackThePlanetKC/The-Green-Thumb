@@ -17,9 +17,16 @@ first BLE module don't exist yet either - see README.md's checklist
 for current status. Bump to 1.0.0 once physical hardware verification
 and a first real module/HACS round-trip are done.
 
+0.2.0: additive feature set since 0.1.0 - alert light, sensor failure
+tracking with dismiss support, LED idle modes, colorblind-safe/custom
+color schemes, a display-only C/F toggle. All backward-compatible
+(new config fields and MQTT topic fields, nothing renamed or removed
+in a way that would break an existing client) - a MINOR bump, not
+MAJOR, per the rule above.
+
 Published to HA/MQTT via mqtt_client.py's publish_device_info() as the
 device registry's sw_version - see docs/ARCHITECTURE.md. Also used as
 the version suffix in the project's distributed zip filename.
 """
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"

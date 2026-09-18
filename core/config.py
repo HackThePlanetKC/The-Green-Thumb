@@ -32,9 +32,48 @@ DEFAULT_CONFIG = {
         "publish_interval_s": 1800,        # MQTT state publish: 30 min default, adjustable at runtime
         "pairing_timeout_s": 60,           # BLE pairing scan window
     },
+    "sensor_failure": {
+        # Currently tracked for DHT11 unconditionally (it has no
+        # calibration concept - a None reading always means a genuine
+        # read failure), and for soil moisture / light ONLY once their
+        # own calibration is complete - see main.py's
+        # _update_sensor_failure_tracking. Before calibration, a None
+        # reading from those two is an expected, normal state, not a
+        # failure; conflating the two would nag a new user about
+        # "sensor failure" for a sensor they simply haven't calibrated
+        # yet. Once calibrated, a None reading from soil/light would be
+        # genuinely unexpected (worth noting: read_percent()/read_fc()
+        # have no other None-producing path once truly calibrated, so
+        # this mostly serves as a consistency/safety-net mechanism for
+        # those two today, not a robust ADC-failure detector - it's
+        # wired the same way as DHT11 for uniformity, not because a new
+        # failure-detection heuristic was invented for ADC sensors).
+        "alert_after_s": 3600,             # 1h continuous failure: visible in health/dashboard, no physical LED yet
+        "notify_after_s": 21600,           # 6h continuous failure: escalates to the physical alert LED
+        # When 2+ sensors are failing at once: "combined" (default)
+        # aggregates them into a single dashboard/health entry without
+        # changing any timing - each sensor is still tracked and times
+        # out independently, they're just displayed together once
+        # multiple are simultaneously alerting. "layered" instead
+        # divides both thresholds above by the number of CURRENTLY
+        # failing sensors, so the alert/notify tiers arrive
+        # progressively sooner the more things are wrong at once (2
+        # concurrent failures halves both thresholds, 3 divides by 3,
+        # etc.) - a stronger, faster signal that something is
+        # systemically wrong (e.g. a wiring/power issue affecting
+        # multiple sensors), not just one isolated sensor acting up.
+        "multi_alert_mode": "combined",    # "combined" | "layered"
+    },
     "display": {
         "auto_cycle_interval_s": 10,       # time between automatic screen advances
         "resume_idle_s": 20,               # auto-cycle resumes 20s after a manual button press
+        # Display-only preference (OLED + dashboard live reading) - does
+        # NOT affect thresholds.temp_f (still always °F internally) or
+        # any stored/calibration value. Converting stored thresholds
+        # too would mean a repeated F->C->F edit cycle could drift a
+        # real health-relevant number by rounding - not worth the risk
+        # for a presentation preference. See docs/ARCHITECTURE.md.
+        "temp_unit": "F",                  # "F" | "C"
         "night_mode": {
             "enabled": True,
             "start_hour": 22, "start_minute": 0,   # 24hr, local time (requires NTP sync)
@@ -47,6 +86,43 @@ DEFAULT_CONFIG = {
         "brightness": 0.15,   # 0.0-1.0 scalar applied to all colors - PLACEHOLDER, needs real tuning once the diffused-fingernail enclosure is physically built
         "blink_interval_ms": 500,
         "red_escalation_delay_s": 3600,   # how long red must persist before escalating to blinking + requires_immediate_attention flag. UX choice, not a sourced threshold - starting default, tune to preference
+        # How the LED shows plain (non-escalated, non-alert) health status:
+        # "solid" (default) - steady color, no motion.
+        # "breathe" - slow sine fade, speed set by idle_breathe_period_ms.
+        # "pulse_once" - off most of the time, one breathing-style pulse
+        #   whenever health status changes (green->yellow, etc.), then
+        #   back to off - a transient "notice this changed" cue rather
+        #   than a constant presence.
+        # "off" - LED stays dark for plain health status entirely; still
+        #   used normally for pairing/wifi-connecting/alert, which are
+        #   all higher-priority than plain idle display.
+        "idle_mode": "solid",
+        "idle_breathe_period_ms": 4000,   # only used in "breathe" mode - deliberately slower than the 3000ms breathing used for boot/wifi-connecting (those signal "something's actively happening"; idle should read calmer)
+    },
+    "color_scheme": {
+        # Health-tier (green/yellow/red) color choices - independent for
+        # the web portal and the alert LED, since someone might want the
+        # LED colorblind-safe but not care about the browser (already
+        # readable via position/text, not just color) or vice versa.
+        # "default" | "colorblind" | "custom". Colorblind swaps green
+        # for blue and red for orange (the standard deuteranopia/
+        # protanopia-safe pairing) - yellow is left alone, already
+        # distinguishable from both. "custom" uses custom_colors below.
+        "web_portal": "default",
+        "alert_led": "default",
+        # When True, changing either of the two fields above through the
+        # settings page also updates the other to match, so they stay
+        # equal - a convenience for "I just want one setting," not a
+        # runtime behavior either surface needs to know about (each
+        # still just reads its own field, which happens to already equal
+        # the other's when synced - see web/server.py's settings save
+        # handler for where the mirroring actually happens).
+        "sync": False,
+        "custom_colors": {
+            "green": [0, 255, 0],
+            "yellow": [255, 180, 0],
+            "red": [255, 0, 0],
+        },
     },
     "timezone": {
         # Fixed UTC offset in hours (supports fractional, e.g. 5.5 for India).
@@ -127,7 +203,6 @@ DEFAULT_CONFIG = {
         "mode": "single",
         "points": [],  # list of {"label": str, "raw": int}, user-defined, any number
     },
-    "profile_name": "generic_houseplant",
 }
 
 

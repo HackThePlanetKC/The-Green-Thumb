@@ -145,6 +145,48 @@ button:hover {
   text-align: center;
 }
 
+.sensor-alerts-section {
+  margin-bottom: 16px;
+}
+
+.sensor-alert-box {
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  font-size: 0.85em;
+}
+
+.sensor-alert-box.tier-alert {
+  background: rgba(249, 168, 37, 0.15);
+  border: 1px solid #f9a825;
+}
+
+.sensor-alert-box.tier-notify {
+  background: rgba(198, 40, 40, 0.15);
+  border: 1px solid var(--error);
+}
+
+.sensor-alert-label {
+  margin-bottom: 6px;
+  color: var(--text);
+}
+
+.dismiss-btn {
+  width: auto;
+  margin-top: 0;
+  margin-right: 6px;
+  padding: 4px 10px;
+  font-size: 0.8em;
+  background: transparent;
+  border: 1px solid var(--text-faint);
+  color: var(--text-muted);
+}
+
+.dismiss-btn:hover {
+  border-color: var(--error);
+  color: var(--error);
+}
+
 .readings {
   display: grid;
   grid-template-columns: 1fr 1fr;

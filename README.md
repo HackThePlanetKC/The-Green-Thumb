@@ -6,6 +6,10 @@ Green Thumb monitors temperature, humidity, soil moisture, and light — cycles 
 
 The base station is intentionally minimal — sensors and reporting only. Actuation (watering, grow lighting, and more) is handled by separate, purpose-built modules that pair to the base wirelessly over Bluetooth Low Energy, so the system grows without the base board ever needing a redesign.
 
+<img src="docs/images/dashboard.png" alt="Green Thumb web dashboard showing live sensor readings, health status, and light tracking" width="360">
+
+*The web dashboard — live readings, health status, and light tracking, all served directly from the device.*
+
 ## Open source & community
 
 Green Thumb is fully open source and built for the hacker/maker community. The full base station firmware, MQTT/BLE architecture, and (eventually) the HACS integration and module firmware are all published here — clone it, modify it, build your own modules, adapt it to hardware you already have on hand.
@@ -32,7 +36,7 @@ Most plant monitors either dump raw numbers with no interpretation, or lock you 
 | WS2812 addressable RGB LED | Plant health at a glance (green / yellow / red), BLE pairing indicator |
 | Pushbutton | Short press: cycle display · Long press: enter BLE pairing mode |
 
-Units throughout: °F and foot-candles.
+Units throughout: °F internally (thresholds, calibration, MQTT) and foot-candles. The OLED and dashboard can optionally display the live temperature reading in °C instead — a display-only preference, see `docs/ARCHITECTURE.md`.
 
 Wiring diagram and pin assignments: [`docs/BUILD.md`](docs/BUILD.md#hardware).
 
@@ -82,17 +86,17 @@ All core design decisions — MQTT topic structure, health-threshold logic, cali
 - [x] `docs/BUILD.md` — build/flash/setup instructions (kept current with each new user-facing step)
 - [x] `main.py` / `boot.py` — asyncio task orchestration, wiring everything above together (`boot.py` also sets up `sys.path` for cross-directory imports — a real bug where this was silently missing was caught and fixed, see `docs/ARCHITECTURE.md`)
 - [x] `version.py` — firmware semver, published to MQTT/HA as `device_info` (gives the future HACS integration a `sw_version`)
+- [x] Alert light + sensor failure tracking — generic `status_led.set_alert()` (never overrides night-mode DND), configurable per-sensor failure thresholds with dismiss support, "combined" or "layered" behavior for simultaneous failures
+- [x] LED idle modes (solid/breathe/pulse-once/off) and colorblind-safe/custom color schemes — independently configurable for the web portal and the alert LED, with an optional sync
 - [x] GPIO pin map (`pins.py`) — confirmed against a physical board photo (ACEIRMC ESP32-C3 Super Mini)
 
 ### Remaining
 
-- [ ] Custom HACS integration (separate repo/component)
+- [ ] Custom HACS integration (separate repo/component) - see [The-Green-Thumb-HACS-Integration](https://github.com/HackThePlanetKC/The-Green-Thumb-HACS-Integration), early scaffold
 - [ ] HACS integration: track time spent at each configured light level (e.g. "3h in Direct Sun today") over the day - the base device only shows the *current* closest-matching light level (see the dashboard's Light Level badge), deliberately not per-category duration; HA has far more room for that kind of historical/statistical tracking than this device does.
 - [ ] First BLE peripheral module: watering pump — **deferred until after the base device is finalized.** The base's module integration points (BLE GATT schema, `ble_central.py`, `module_manager.py`, `pairing.py`, display module screens, dashboard Modules section, MQTT `module/<mod_id>/*` topics) stay stable and working in the meantime, since modules will connect through them once this resumes.
 - [ ] Light sensor real-world calibration (needs a lux reference)
 - [ ] High-intensity/sunburn light thresholds (`light_fc.red_min`/`red_max`) — no sourced data yet
-- [ ] Idle animations and user-selectable color options for the status LED — deferred, decide later
-- [ ] Additional button press combinations, or a second physical button — deferred, decide later
 
 ## Dashboard
 

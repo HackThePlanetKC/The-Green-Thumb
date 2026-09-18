@@ -150,6 +150,8 @@ _SETTINGS_FIELDS = [
     ("sample_interval_s", "timing.sample_interval_s", "int", False),
     ("publish_interval_s", "timing.publish_interval_s", "int", False),
     ("pairing_timeout_s", "timing.pairing_timeout_s", "int", False),
+    ("sensor_failure_alert_after_s", "sensor_failure.alert_after_s", "int", False),
+    ("sensor_failure_notify_after_s", "sensor_failure.notify_after_s", "int", False),
     ("auto_cycle_interval_s", "display.auto_cycle_interval_s", "int", False),
     ("resume_idle_s", "display.resume_idle_s", "int", False),
     ("night_mode_enabled", "display.night_mode.enabled", "bool", False),
@@ -162,6 +164,7 @@ _SETTINGS_FIELDS = [
     ("led_brightness", "status_led.brightness", "float", False),
     ("led_blink_interval_ms", "status_led.blink_interval_ms", "int", False),
     ("led_red_escalation_delay_s", "status_led.red_escalation_delay_s", "int", False),
+    ("led_idle_breathe_period_ms", "status_led.idle_breathe_period_ms", "int", False),
     ("utc_offset_hours", "timezone.utc_offset_hours", "float", False),
 ]
 
@@ -237,7 +240,7 @@ class WebServer:
         mqtt_manager=None, light_raw_sample_provider=None,
         calibration_manager=None, calibration_command_handler=None,
         pairing_manager=None, pairing_command_handler=None,
-        module_manager=None,
+        module_manager=None, dismiss_sensor_alert_handler=None,
         port=80,
     ):
         self._cfg = cfg
@@ -251,6 +254,7 @@ class WebServer:
         self._pairing_manager = pairing_manager
         self._pairing_command_handler = pairing_command_handler
         self._module_manager = module_manager
+        self._dismiss_sensor_alert_handler = dismiss_sensor_alert_handler
         self._port = port
         self._server = None
 
@@ -378,7 +382,8 @@ class WebServer:
         part of the live 5s-polled readings - fetched once when the page
         loads and again only on an explicit manual refresh, not on every
         poll tick. light_hours_provider is a zero-argument callable
-        returning {"light_hours_today": float or None} - matches
+        returning a bare float or None (not a dict) - this handler is
+        what wraps it under the "light_hours_today" key below. Matches
         core/light_tracker.py's get_light_hours_today(), with target
         range included from config directly (not the provider) since
         that's a config value, not something requiring live sensor state.
@@ -418,6 +423,18 @@ class WebServer:
             await self._handle_settings_mqtt(writer, body)
         elif path == "/api/settings/light_mode":
             await self._handle_settings_light_mode(writer, body)
+        elif path == "/api/settings/idle_mode":
+            await self._handle_settings_idle_mode(writer, body)
+        elif path == "/api/settings/temp_unit":
+            await self._handle_settings_temp_unit(writer, body)
+        elif path == "/api/settings/multi_alert_mode":
+            await self._handle_settings_multi_alert_mode(writer, body)
+        elif path == "/api/settings/color_scheme":
+            await self._handle_settings_color_scheme(writer, body)
+        elif path == "/api/settings/color_scheme_sync":
+            await self._handle_settings_color_scheme_sync(writer, body)
+        elif path == "/api/settings/custom_colors":
+            await self._handle_settings_custom_colors(writer, body)
         elif path == "/api/settings/light_points/add":
             await self._handle_light_points_add(writer, body)
         elif path == "/api/settings/light_points/remove":
@@ -430,6 +447,8 @@ class WebServer:
             await self._handle_modules_calibrate(writer, body)
         elif path == "/api/modules/set_name":
             await self._handle_modules_set_name(writer, body)
+        elif path == "/api/dismiss_sensor_alert":
+            await self._handle_dismiss_sensor_alert_route(writer, body)
         else:
             await self._send_response(writer, 404, "text/plain", b"Not Found")
 
@@ -514,6 +533,8 @@ class WebServer:
         light_cal = self._cfg.get("light_calibration", {})
         mqtt_cfg = self._cfg.get("mqtt", {})
         light_mode_cfg = self._cfg.get("light_mode", {})
+        sensor_failure_cfg = self._cfg.get("sensor_failure", {})
+        color_scheme_cfg = self._cfg.get("color_scheme", {})
 
         data = {
             "fields": values,
@@ -524,6 +545,15 @@ class WebServer:
             "light_mode": {
                 "mode": light_mode_cfg.get("mode", "single"),
                 "points": light_mode_cfg.get("points", []),
+            },
+            "multi_alert_mode": sensor_failure_cfg.get("multi_alert_mode", "combined"),
+            "temp_unit": self._cfg.get("display", {}).get("temp_unit", "F"),
+            "idle_mode": self._cfg.get("status_led", {}).get("idle_mode", "solid"),
+            "color_scheme": {
+                "web_portal": color_scheme_cfg.get("web_portal", "default"),
+                "alert_led": color_scheme_cfg.get("alert_led", "default"),
+                "sync": color_scheme_cfg.get("sync", False),
+                "custom_colors": color_scheme_cfg.get("custom_colors", {}),
             },
             "mqtt": {
                 "broker": mqtt_cfg.get("broker", ""),
@@ -677,6 +707,168 @@ class WebServer:
         self._cfg["light_mode"]["mode"] = mode
         config_module.save(self._cfg)
         result = {"success": True, "mode": mode}
+        await self._send_response(writer, 200, "application/json", json.dumps(result).encode())
+
+    async def _handle_settings_idle_mode(self, writer, body):
+        """
+        Sets status_led.idle_mode - how plain (non-escalated, non-alert)
+        health status is shown: "solid" (default), "breathe" (speed set
+        separately by led_idle_breathe_period_ms, in the generic
+        _SETTINGS_FIELDS list above), "pulse_once" (one pulse on status
+        change, then off), or "off". Same dedicated-endpoint pattern as
+        the other enum settings, for the same reason - validation
+        against a fixed allowed set the generic field coercion doesn't
+        support.
+        """
+        fields = parse_form_body(body)
+        mode = fields.get("mode", "").strip()
+
+        if mode not in ("solid", "breathe", "pulse_once", "off"):
+            result = {"success": False, "error": "mode must be 'solid', 'breathe', 'pulse_once', or 'off'"}
+            await self._send_response(writer, 400, "application/json", json.dumps(result).encode())
+            return
+
+        self._cfg["status_led"]["idle_mode"] = mode
+        config_module.save(self._cfg)
+        result = {"success": True, "mode": mode}
+        await self._send_response(writer, 200, "application/json", json.dumps(result).encode())
+
+    async def _handle_settings_temp_unit(self, writer, body):
+        """
+        Display-only preference (OLED + dashboard live reading) - never
+        touches thresholds.temp_f or any stored/calibration value, both
+        of which stay in °F internally regardless of this setting (see
+        config.display.temp_unit and docs/ARCHITECTURE.md).
+        """
+        fields = parse_form_body(body)
+        unit = fields.get("unit", "").strip()
+
+        if unit not in ("F", "C"):
+            result = {"success": False, "error": "unit must be 'F' or 'C'"}
+            await self._send_response(writer, 400, "application/json", json.dumps(result).encode())
+            return
+
+        self._cfg["display"]["temp_unit"] = unit
+        config_module.save(self._cfg)
+        result = {"success": True, "unit": unit}
+        await self._send_response(writer, 200, "application/json", json.dumps(result).encode())
+
+    async def _handle_settings_multi_alert_mode(self, writer, body):
+        """
+        Switches between "combined" (aggregate simultaneous sensor
+        failure alerts into one display entry, no timing change) and
+        "layered" (both failure thresholds shrink as more sensors fail
+        at once - see config.py's sensor_failure comment and main.py's
+        _compute_sensor_alerts). Same dedicated-endpoint pattern as
+        _handle_settings_light_mode above, for the same reason -
+        validation against a fixed allowed set.
+        """
+        fields = parse_form_body(body)
+        mode = fields.get("mode", "").strip()
+
+        if mode not in ("combined", "layered"):
+            result = {"success": False, "error": "mode must be 'combined' or 'layered'"}
+            await self._send_response(writer, 400, "application/json", json.dumps(result).encode())
+            return
+
+        self._cfg["sensor_failure"]["multi_alert_mode"] = mode
+        config_module.save(self._cfg)
+        result = {"success": True, "mode": mode}
+        await self._send_response(writer, 200, "application/json", json.dumps(result).encode())
+
+    async def _handle_settings_color_scheme(self, writer, body):
+        """
+        Sets the color scheme ("default" | "colorblind" | "custom") for
+        one surface - "web_portal" or "alert_led", set independently
+        (see config.color_scheme in core/config.py). If
+        color_scheme.sync is currently True, the change is also mirrored
+        onto the OTHER surface, so they stay equal - the mirroring
+        happens here, at write time; neither the dashboard's rendering
+        nor status_led.py's tick() need to know "sync" exists, they just
+        each read their own field.
+        """
+        fields = parse_form_body(body)
+        surface = fields.get("surface", "").strip()
+        scheme = fields.get("scheme", "").strip()
+
+        if surface not in ("web_portal", "alert_led"):
+            result = {"success": False, "error": "surface must be 'web_portal' or 'alert_led'"}
+            await self._send_response(writer, 400, "application/json", json.dumps(result).encode())
+            return
+        if scheme not in ("default", "colorblind", "custom"):
+            result = {"success": False, "error": "scheme must be 'default', 'colorblind', or 'custom'"}
+            await self._send_response(writer, 400, "application/json", json.dumps(result).encode())
+            return
+
+        self._cfg["color_scheme"][surface] = scheme
+        if self._cfg["color_scheme"]["sync"]:
+            other = "alert_led" if surface == "web_portal" else "web_portal"
+            self._cfg["color_scheme"][other] = scheme
+
+        config_module.save(self._cfg)
+        result = {
+            "success": True,
+            "web_portal": self._cfg["color_scheme"]["web_portal"],
+            "alert_led": self._cfg["color_scheme"]["alert_led"],
+        }
+        await self._send_response(writer, 200, "application/json", json.dumps(result).encode())
+
+    async def _handle_settings_color_scheme_sync(self, writer, body):
+        """
+        Toggles color_scheme.sync. Turning it ON immediately mirrors
+        web_portal's current scheme onto alert_led (an arbitrary but
+        consistent choice of which surface "wins" at the moment sync is
+        first enabled - web_portal, always), so the two aren't left
+        mismatched until the next individual change. Turning it OFF just
+        stops future mirroring; it doesn't separate anything that's
+        already equal.
+        """
+        fields = parse_form_body(body)
+        sync = fields.get("sync", "").strip() in ("true", "1", "on", "yes")
+
+        self._cfg["color_scheme"]["sync"] = sync
+        if sync:
+            self._cfg["color_scheme"]["alert_led"] = self._cfg["color_scheme"]["web_portal"]
+
+        config_module.save(self._cfg)
+        result = {
+            "success": True,
+            "sync": sync,
+            "web_portal": self._cfg["color_scheme"]["web_portal"],
+            "alert_led": self._cfg["color_scheme"]["alert_led"],
+        }
+        await self._send_response(writer, 200, "application/json", json.dumps(result).encode())
+
+    async def _handle_settings_custom_colors(self, writer, body):
+        """
+        Sets the three custom health-tier colors, only actually used
+        when a surface's scheme is "custom". Fields arrive as HTML
+        <input type="color"> hex strings ("#rrggbb") - friendlier than
+        nine separate 0-255 number fields - parsed into RGB triples here.
+        """
+        fields = parse_form_body(body)
+
+        def _parse_hex(value):
+            value = value.strip().lstrip("#")
+            if len(value) != 6:
+                return None
+            try:
+                return [int(value[0:2], 16), int(value[2:4], 16), int(value[4:6], 16)]
+            except ValueError:
+                return None
+
+        parsed = {}
+        for key in ("green", "yellow", "red"):
+            rgb = _parse_hex(fields.get(key, ""))
+            if rgb is None:
+                result = {"success": False, "error": "{} must be a valid #rrggbb color".format(key)}
+                await self._send_response(writer, 400, "application/json", json.dumps(result).encode())
+                return
+            parsed[key] = rgb
+
+        self._cfg["color_scheme"]["custom_colors"] = parsed
+        config_module.save(self._cfg)
+        result = {"success": True, "custom_colors": parsed}
         await self._send_response(writer, 200, "application/json", json.dumps(result).encode())
 
     async def _handle_light_points_add(self, writer, body):
@@ -875,6 +1067,41 @@ class WebServer:
         if not success:
             result["error"] = "module not currently connected"
         await self._send_response(writer, 200, "application/json", json.dumps(result).encode())
+
+    async def _handle_dismiss_sensor_alert_route(self, writer, body):
+        """
+        Dismisses one sensor's currently-open failure episode - see
+        main.py's _handle_dismiss_sensor_alert for the full reasoning
+        (scoped to the current episode, not permanent). The handler
+        itself is synchronous (just a dict mutation, no BLE/MQTT
+        involved), so this route calls it directly rather than
+        awaiting it.
+
+        Expects a real sensor key ("dht11", "soil_moisture", "light"),
+        never the "multiple" placeholder a combined-mode alert entry
+        uses for its own display purposes - the dashboard is
+        responsible for offering per-sensor dismiss actions using the
+        real keys listed under a combined entry's "sensors" field, not
+        sending "multiple" itself. Sending an unrecognized/placeholder
+        key here is not an error - _handle_dismiss_sensor_alert already
+        no-ops silently for any sensor with no currently-open episode,
+        which "multiple" always is.
+        """
+        fields = parse_form_body(body)
+        sensor_key = fields.get("sensor", "").strip()
+
+        if not sensor_key:
+            result = {"success": False, "error": "sensor is required"}
+            await self._send_response(writer, 400, "application/json", json.dumps(result).encode())
+            return
+
+        if self._dismiss_sensor_alert_handler is None:
+            result = {"success": False, "error": "dismiss support not available"}
+            await self._send_response(writer, 503, "application/json", json.dumps(result).encode())
+            return
+
+        self._dismiss_sensor_alert_handler(sensor_key)
+        await self._send_response(writer, 200, "application/json", json.dumps({"success": True}).encode())
 
     async def _send_response(self, writer, status, content_type, body_bytes):
         status_text = _STATUS_TEXT.get(status, "")

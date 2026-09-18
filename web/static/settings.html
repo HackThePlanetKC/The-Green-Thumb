@@ -93,6 +93,12 @@
           <label>Auto-cycle interval (s) <input type="number" name="auto_cycle_interval_s"></label>
           <label>Resume idle time (s) <input type="number" name="resume_idle_s"></label>
         </div>
+        <div style="margin: 10px 0;">
+          <div style="font-size:0.85em; margin-bottom:4px;">Temperature Unit</div>
+          <label class="checkbox-label"><input type="radio" name="temp_unit_radio" value="F" id="temp-unit-f"> Fahrenheit</label>
+          <label class="checkbox-label"><input type="radio" name="temp_unit_radio" value="C" id="temp-unit-c"> Celsius</label>
+          <p class="field-note">Changes how the OLED display and this dashboard show the live reading only — thresholds below always stay in °F.</p>
+        </div>
         <label class="checkbox-label"><input type="checkbox" name="night_mode_enabled"> Night mode enabled</label>
         <div class="field-grid">
           <label>Start hour (0-23) <input type="number" min="0" max="23" name="night_mode_start_hour"></label>
@@ -110,6 +116,26 @@
           <label>Brightness (0.0–1.0) <input type="number" step="0.01" min="0" max="1" name="led_brightness"></label>
           <label>Blink interval (ms) <input type="number" name="led_blink_interval_ms"></label>
           <label>Red escalation delay (s) <input type="number" name="led_red_escalation_delay_s"></label>
+        </div>
+        <div style="margin: 10px 0;">
+          <div style="font-size:0.85em; margin-bottom:4px;">Idle Display (plain health status, no alert/escalation)</div>
+          <label class="checkbox-label"><input type="radio" name="idle_mode_radio" value="solid" id="idle-mode-solid"> Solid</label>
+          <label class="checkbox-label"><input type="radio" name="idle_mode_radio" value="breathe" id="idle-mode-breathe"> Breathe</label>
+          <label class="checkbox-label"><input type="radio" name="idle_mode_radio" value="pulse_once" id="idle-mode-pulse"> Pulse once on change</label>
+          <label class="checkbox-label"><input type="radio" name="idle_mode_radio" value="off" id="idle-mode-off"> Off</label>
+        </div>
+        <div class="field-grid">
+          <label>Breathe speed (ms per cycle) <input type="number" name="led_idle_breathe_period_ms"></label>
+        </div>
+        <p class="field-note">Breathe speed only applies when Idle Display is set to Breathe.</p>
+      </details>
+
+      <details>
+        <summary>Sensor Failure Alerts</summary>
+        <p class="field-note">How long a sensor must be continuously failing before it's flagged. The first threshold shows up in the dashboard/HA only; the second also lights the physical alert LED (a slow flash between the current health color and red — never overrides night-mode DND).</p>
+        <div class="field-grid">
+          <label>Alert after (s) <input type="number" name="sensor_failure_alert_after_s"></label>
+          <label>Notify LED after (s) <input type="number" name="sensor_failure_notify_after_s"></label>
         </div>
       </details>
 
@@ -155,6 +181,56 @@
             <span id="sampled-raw-display"></span>
             <button type="button" id="add-point-btn" disabled>Add Point</button>
           </div>
+        </div>
+      </details>
+    </div>
+
+    <div id="advanced-multi-alert-mode">
+      <details class="light-mode-section">
+        <summary>Multiple Simultaneous Sensor Failures</summary>
+        <p class="field-note">If more than one sensor is failing at the same time, show one combined alert (default), or make the alert/notify thresholds shrink the more things are wrong at once (a faster warning for what's likely a systemic issue, e.g. power or wiring, rather than one sensor acting up on its own).</p>
+
+        <label class="checkbox-label">
+          <input type="radio" name="multi_alert_mode_radio" value="combined" id="multi-alert-combined"> One combined alert
+        </label>
+        <label class="checkbox-label">
+          <input type="radio" name="multi_alert_mode_radio" value="layered" id="multi-alert-layered"> Progressively faster alerts
+        </label>
+      </details>
+    </div>
+
+    <div id="advanced-color-scheme">
+      <details class="light-mode-section">
+        <summary>Color Options</summary>
+        <p class="field-note">Colorblind-Safe Options — applies to the green/yellow/red health status colors. Swaps green for blue and red for orange (yellow is already distinguishable from both). Chosen independently for the web portal and the physical alert LED, unless synced below.</p>
+
+        <label class="checkbox-label">
+          <input type="checkbox" id="color-scheme-sync"> Sync colors between device and portal
+        </label>
+
+        <div class="field-grid" style="margin-top:10px;">
+          <div>
+            <div style="font-size:0.8em; color:var(--text-muted); margin-bottom:4px;">Web Portal</div>
+            <label class="checkbox-label"><input type="radio" name="web_portal_scheme_radio" value="default" id="web-portal-default"> Default</label>
+            <label class="checkbox-label"><input type="radio" name="web_portal_scheme_radio" value="colorblind" id="web-portal-colorblind"> Colorblind-safe</label>
+            <label class="checkbox-label"><input type="radio" name="web_portal_scheme_radio" value="custom" id="web-portal-custom"> Custom</label>
+          </div>
+          <div id="alert-led-scheme-group">
+            <div style="font-size:0.8em; color:var(--text-muted); margin-bottom:4px;">Alert LED</div>
+            <label class="checkbox-label"><input type="radio" name="alert_led_scheme_radio" value="default" id="alert-led-default"> Default</label>
+            <label class="checkbox-label"><input type="radio" name="alert_led_scheme_radio" value="colorblind" id="alert-led-colorblind"> Colorblind-safe</label>
+            <label class="checkbox-label"><input type="radio" name="alert_led_scheme_radio" value="custom" id="alert-led-custom"> Custom</label>
+          </div>
+        </div>
+
+        <div id="custom-colors-section" style="margin-top:12px; display:none;">
+          <p class="field-note">Used by whichever surface(s) above are set to "Custom".</p>
+          <div class="field-grid">
+            <label>Good <input type="color" id="custom-color-green"></label>
+            <label>Warning <input type="color" id="custom-color-yellow"></label>
+            <label>Critical <input type="color" id="custom-color-red"></label>
+          </div>
+          <button type="button" id="save-custom-colors-btn" style="margin-top:8px;">Save Custom Colors</button>
         </div>
       </details>
     </div>
@@ -249,6 +325,56 @@
       mqttStatusEl.className = "mqtt-status-line " + (data.mqtt.connected ? "cal-yes" : "cal-no");
 
       renderLightMode(data.light_mode.mode, data.light_mode.points);
+      renderMultiAlertMode(data.multi_alert_mode);
+      renderColorScheme(data.color_scheme);
+      renderTempUnit(data.temp_unit);
+      renderIdleMode(data.idle_mode);
+    }
+
+    function renderIdleMode(mode) {
+      document.getElementById("idle-mode-solid").checked = mode === "solid";
+      document.getElementById("idle-mode-breathe").checked = mode === "breathe";
+      document.getElementById("idle-mode-pulse").checked = mode === "pulse_once";
+      document.getElementById("idle-mode-off").checked = mode === "off";
+    }
+
+    function renderTempUnit(unit) {
+      document.getElementById("temp-unit-f").checked = unit === "F";
+      document.getElementById("temp-unit-c").checked = unit === "C";
+    }
+
+    function renderMultiAlertMode(mode) {
+      document.getElementById("multi-alert-combined").checked = mode === "combined";
+      document.getElementById("multi-alert-layered").checked = mode === "layered";
+    }
+
+    function rgbArrayToHex(rgb) {
+      return "#" + rgb.map(c => c.toString(16).padStart(2, "0")).join("");
+    }
+
+    function renderColorScheme(scheme) {
+      document.getElementById("color-scheme-sync").checked = scheme.sync;
+
+      document.getElementById("web-portal-default").checked = scheme.web_portal === "default";
+      document.getElementById("web-portal-colorblind").checked = scheme.web_portal === "colorblind";
+      document.getElementById("web-portal-custom").checked = scheme.web_portal === "custom";
+
+      document.getElementById("alert-led-default").checked = scheme.alert_led === "default";
+      document.getElementById("alert-led-colorblind").checked = scheme.alert_led === "colorblind";
+      document.getElementById("alert-led-custom").checked = scheme.alert_led === "custom";
+
+      // When synced, the Alert LED radio group is redundant (always
+      // mirrors Web Portal) - disable it rather than just hiding it, so
+      // it's clear at a glance why it isn't independently clickable.
+      document.querySelectorAll('input[name="alert_led_scheme_radio"]').forEach(r => { r.disabled = scheme.sync; });
+
+      const showCustom = scheme.web_portal === "custom" || scheme.alert_led === "custom";
+      document.getElementById("custom-colors-section").style.display = showCustom ? "" : "none";
+      if (scheme.custom_colors && scheme.custom_colors.green) {
+        document.getElementById("custom-color-green").value = rgbArrayToHex(scheme.custom_colors.green);
+        document.getElementById("custom-color-yellow").value = rgbArrayToHex(scheme.custom_colors.yellow);
+        document.getElementById("custom-color-red").value = rgbArrayToHex(scheme.custom_colors.red);
+      }
     }
 
     function renderLightMode(mode, points) {
@@ -363,10 +489,115 @@
       });
     });
 
+    document.querySelectorAll('input[name="idle_mode_radio"]').forEach(radio => {
+      radio.addEventListener("change", async (e) => {
+        try {
+          await fetch("/api/settings/idle_mode", {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: "mode=" + e.target.value,
+          });
+        } catch (err) { /* setting stays visually selected; next load reflects actual saved state */ }
+      });
+    });
+
+    document.querySelectorAll('input[name="temp_unit_radio"]').forEach(radio => {
+      radio.addEventListener("change", async (e) => {
+        try {
+          await fetch("/api/settings/temp_unit", {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: "unit=" + e.target.value,
+          });
+        } catch (err) { /* setting stays visually selected; next load reflects actual saved state */ }
+      });
+    });
+
+    document.querySelectorAll('input[name="multi_alert_mode_radio"]').forEach(radio => {
+      radio.addEventListener("change", async (e) => {
+        try {
+          await fetch("/api/settings/multi_alert_mode", {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: "mode=" + e.target.value,
+          });
+        } catch (err) { /* setting stays visually selected; next load will reflect actual saved state */ }
+      });
+    });
+
+    document.getElementById("color-scheme-sync").addEventListener("change", async (e) => {
+      try {
+        const resp = await fetch("/api/settings/color_scheme_sync", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: "sync=" + (e.target.checked ? "true" : "false"),
+        });
+        const result = await resp.json();
+        if (result.success) {
+          loadSettings(); // sync may have mirrored web_portal onto alert_led - refresh the whole view
+        }
+      } catch (err) { /* checkbox stays visually toggled; next load reflects actual saved state */ }
+    });
+
+    document.querySelectorAll('input[name="web_portal_scheme_radio"]').forEach(radio => {
+      radio.addEventListener("change", async (e) => {
+        try {
+          const resp = await fetch("/api/settings/color_scheme", {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: "surface=web_portal&scheme=" + e.target.value,
+          });
+          const result = await resp.json();
+          if (result.success) {
+            // Sync may have mirrored this onto alert_led too - refresh
+            // the whole settings view so both stay visually accurate.
+            loadSettings();
+          }
+        } catch (err) { /* setting stays visually selected; next load reflects actual saved state */ }
+      });
+    });
+
+    document.querySelectorAll('input[name="alert_led_scheme_radio"]').forEach(radio => {
+      radio.addEventListener("change", async (e) => {
+        try {
+          await fetch("/api/settings/color_scheme", {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: "surface=alert_led&scheme=" + e.target.value,
+          });
+        } catch (err) { /* setting stays visually selected; next load reflects actual saved state */ }
+      });
+    });
+
+    document.getElementById("save-custom-colors-btn").addEventListener("click", async () => {
+      const btn = document.getElementById("save-custom-colors-btn");
+      btn.disabled = true;
+      btn.textContent = "Saving...";
+      try {
+        const params = new URLSearchParams();
+        params.append("green", document.getElementById("custom-color-green").value);
+        params.append("yellow", document.getElementById("custom-color-yellow").value);
+        params.append("red", document.getElementById("custom-color-red").value);
+        const resp = await fetch("/api/settings/custom_colors", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: params.toString(),
+        });
+        const result = await resp.json();
+        btn.disabled = false;
+        btn.textContent = result.success ? "Saved ✓" : "Failed";
+      } catch (err) {
+        btn.disabled = false;
+        btn.textContent = "Save Custom Colors";
+      }
+    });
+
     const advancedToggle = document.getElementById("advanced-toggle");
     const advancedSections = [
       document.getElementById("advanced-fields"),
       document.getElementById("advanced-light-mode"),
+      document.getElementById("advanced-multi-alert-mode"),
+      document.getElementById("advanced-color-scheme"),
     ];
 
     function applyAdvancedVisibility(show) {

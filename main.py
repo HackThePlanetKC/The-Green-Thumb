@@ -90,6 +90,50 @@ def _is_night_now(night_cfg, hour, minute):
     return now_min >= start_min or now_min < end_min
 
 
+# Standard deuteranopia/protanopia-safe substitute for the green/red
+# health tiers - blue for "good," orange for "critical." Yellow is left
+# alone; it's already distinguishable from both without red-green
+# confusion. See config.color_scheme in core/config.py.
+_COLORBLIND_HEALTH_COLORS = {"green": (0, 120, 255), "yellow": (255, 180, 0), "red": (255, 140, 0)}
+
+
+def _format_temp(temp_f, unit):
+    """
+    Display-only conversion for the OLED/dashboard live reading - never
+    applied to thresholds.temp_f or any stored/calibration value, which
+    stay in °F internally regardless of this preference (see
+    config.display.temp_unit and docs/ARCHITECTURE.md). Returns a
+    rounded int and its unit letter, or (None, unit) if temp_f itself
+    is None (sensor not yet read/failing) - callers format the "--"
+    placeholder themselves, consistent with how every other reading
+    already handles a None value.
+    """
+    if temp_f is None:
+        return None, unit
+    if unit == "C":
+        return round((temp_f - 32) * 5 / 9), "C"
+    return round(temp_f), "F"
+
+
+def _resolve_health_colors(scheme_name, custom_colors):
+    """
+    Translates a config.color_scheme.{web_portal,alert_led} value into
+    the {"green","yellow","red"} RGB dict status_led.tick()'s
+    health_colors argument expects, or None for "default" (letting
+    status_led.py fall back to its own built-in defaults rather than
+    duplicating them here).
+    """
+    if scheme_name == "colorblind":
+        return _COLORBLIND_HEALTH_COLORS
+    if scheme_name == "custom":
+        return {
+            "green": tuple(custom_colors["green"]),
+            "yellow": tuple(custom_colors["yellow"]),
+            "red": tuple(custom_colors["red"]),
+        }
+    return None
+
+
 async def main():
     cfg = config_module.load()
     base_id = identity.get_base_id()
@@ -153,7 +197,115 @@ async def main():
         "light_fc": None, "light_level_label": None,
         "health": {"status": None, "reasons": []},
         "requires_immediate_attention": False,
+        "sensor_failures": {},  # sensor_key -> {"failing_since_ms": int, "dismissed": bool}
+        "sensor_alerts": [],    # computed each sensor_loop tick, see _compute_sensor_alerts
     }
+
+    def _update_sensor_failure_tracking(sensor_key, is_failing):
+        """
+        Starts/clears a failure episode for one sensor. Only called for
+        sensors with a genuine failure signal today (just DHT11 - see
+        config.py's sensor_failure comment) - is_failing must mean "this
+        reading attempt actually failed," never "this reading is None
+        because the sensor isn't calibrated yet," which is a normal,
+        expected state and would produce constant false-positive alerts
+        if conflated with real failure.
+
+        Recovery clears the episode ENTIRELY, including any dismissal -
+        a fresh failure after a real recovery is a new episode, not a
+        continuation of one the user already dismissed. See
+        _handle_dismiss_sensor_alert for the dismissal-scope reasoning.
+        """
+        failures = latest["sensor_failures"]
+        if is_failing:
+            if sensor_key not in failures:
+                failures[sensor_key] = {"failing_since_ms": time.ticks_ms(), "dismissed": False}
+        else:
+            failures.pop(sensor_key, None)
+
+    def _compute_sensor_alerts():
+        """
+        Returns a list of {"sensor", "duration_s", "tier", "dismissed"}
+        for every sensor that's been failing at least alert_after_s (or
+        the effective, shortened threshold in "layered" mode - see
+        below). "tier" is "alert" (visible in health/dashboard only) or
+        "notify" (escalates to the physical LED too - see the
+        sensor_loop call site below). Dismissed entries are still
+        included, not hidden - dismissal silences the urgency (LED, and
+        the dashboard can choose to de-emphasize it), not the underlying
+        visibility that a problem exists.
+
+        config.sensor_failure.multi_alert_mode controls what happens
+        when 2+ sensors are failing at once:
+        - "combined" (default): each sensor is still tracked and timed
+          independently against the configured thresholds - this mode
+          only changes the OUTPUT, collapsing multiple simultaneously-
+          qualifying alerts into a single combined entry (sensor:
+          "multiple", with the individual sensor keys listed under
+          "sensors") rather than changing any timing.
+        - "layered": both thresholds are divided by the number of
+          CURRENTLY failing sensors (tracked or not yet past
+          alert_after_s - the count includes any sensor with an open
+          failure episode) before comparing, so the more things are
+          wrong at once, the sooner alert/notify tiers arrive - a
+          stronger, faster signal for a systemic problem (e.g. a power/
+          wiring issue affecting multiple sensors at once) than treating
+          each sensor as an isolated, independently-timed issue.
+        """
+        now = time.ticks_ms()
+        cfg_sf = cfg["sensor_failure"]
+        failing_count = len(latest["sensor_failures"])
+        divisor = failing_count if cfg_sf["multi_alert_mode"] == "layered" and failing_count > 1 else 1
+        effective_alert_after_s = cfg_sf["alert_after_s"] / divisor
+        effective_notify_after_s = cfg_sf["notify_after_s"] / divisor
+
+        qualifying = []
+        for sensor_key, info in latest["sensor_failures"].items():
+            duration_s = time.ticks_diff(now, info["failing_since_ms"]) / 1000
+            if duration_s < effective_alert_after_s:
+                continue
+            tier = "notify" if duration_s >= effective_notify_after_s else "alert"
+            qualifying.append({
+                "sensor": sensor_key,
+                "duration_s": round(duration_s),
+                "tier": tier,
+                "dismissed": info["dismissed"],
+            })
+
+        if not qualifying:
+            return []
+
+        if cfg_sf["multi_alert_mode"] == "combined" and len(qualifying) > 1:
+            return [{
+                "sensor": "multiple",
+                "sensors": [q["sensor"] for q in qualifying],
+                "duration_s": max(q["duration_s"] for q in qualifying),
+                "tier": "notify" if any(q["tier"] == "notify" for q in qualifying) else "alert",
+                # Only combined-dismissed if EVERY contributing sensor is
+                # individually dismissed - one undismissed sensor inside
+                # the group is still something needing attention.
+                "dismissed": all(q["dismissed"] for q in qualifying),
+            }]
+
+        return qualifying
+
+    def _handle_dismiss_sensor_alert(sensor_key):
+        """
+        Silences the CURRENT failure episode for one sensor - e.g. a
+        user who knows their DHT11 is intentionally disconnected and
+        doesn't want to keep being notified about it. Scoped to the
+        ongoing episode, not permanent: if the sensor recovers and later
+        fails again, that's a new episode and alerts normally (see
+        _update_sensor_failure_tracking) - avoids permanently silencing
+        a sensor that might fail again for an unrelated, real reason
+        later. No-ops silently if the sensor isn't currently failing
+        (nothing to dismiss), consistent with this project's established
+        pattern of not raising just because a client's request no longer
+        matches current state.
+        """
+        failure = latest["sensor_failures"].get(sensor_key)
+        if failure is not None:
+            failure["dismissed"] = True
 
     def _build_health_payload():
         """
@@ -167,10 +319,13 @@ async def main():
         entirely, meaning the next periodic publish after an escalation
         (up to 30 min later, since health is a retained topic) silently
         overwrote the retained flag and lost it, even though the LED
-        was still physically blinking red.
+        was still physically blinking red. sensor_alerts is included
+        here for the same reason - a single builder used everywhere,
+        rather than risking the same class of bug a second time.
         """
         payload = dict(latest["health"] or {"status": None, "reasons": []})
         payload["requires_immediate_attention"] = latest["requires_immediate_attention"]
+        payload["sensor_alerts"] = latest["sensor_alerts"]
         return payload
 
     # mqtt must be constructed BEFORE module_mgr/pairing_mgr below, since
@@ -199,10 +354,22 @@ async def main():
     def _get_light_hours_for_mqtt():
         return {"light_hours_today": tracker.get_light_hours_today()}
 
+    def _handle_base_command(payload):
+        """
+        Base-level command dispatch for anything other than set_config/
+        get_light_hours_today (handled internally by mqtt_client.py
+        itself). Currently just dismiss_sensor_alert - a plain dict
+        dispatch here rather than its own mqtt_client.py-level action
+        since it's specific to main.py's own sensor-failure tracking,
+        not something mqtt_client.py needs to know exists.
+        """
+        if payload.get("action") == "dismiss_sensor_alert":
+            _handle_dismiss_sensor_alert(payload.get("sensor"))
+
     mqtt = mqtt_client.GreenThumbMqtt(
         cfg["mqtt"]["broker"], cfg["mqtt"]["port"], cfg,
         username=cfg["mqtt"]["username"], password=cfg["mqtt"]["password"],
-        on_command=None,  # no other base-level command actions implemented yet
+        on_command=_handle_base_command,
         on_calibration_command=_handle_calibration_command,
         on_pairing_command=_handle_pairing_command,
         on_module_command=_handle_module_command,
@@ -214,6 +381,7 @@ async def main():
 
     # --- Web portal providers (see web/server.py's documented contracts) ---
     def _get_dashboard_state():
+        color_scheme_cfg = cfg["color_scheme"]
         return {
             "temp_f": latest["temp_f"],
             "humidity_pct": latest["humidity_pct"],
@@ -221,9 +389,24 @@ async def main():
             "light_fc": latest["light_fc"],
             "light_level_label": latest["light_level_label"],
             "health": latest["health"],
+            "sensor_alerts": latest["sensor_alerts"],
             "wifi_ip": wifi_mgr.ip_address(),
             "mqtt_connected": mqtt.is_connected(),
             "modules": [_build_module_summary(mod_id) for mod_id in module_mgr.known_module_ids()],
+            # Device-level setting, not sensor data - same precedent as
+            # device_name already being exposed here (see
+            # docs/ARCHITECTURE.md). Sent as the scheme NAME plus raw
+            # custom_colors (not a resolved RGB dict like status_led.py
+            # gets) - the dashboard is a different rendering context
+            # (CSS hex, not RGB tuples) and picks its own hex
+            # representation for "colorblind", kept consistent with but
+            # not literally sharing code with main.py's
+            # _COLORBLIND_HEALTH_COLORS constant.
+            "color_scheme": {
+                "web_portal": color_scheme_cfg["web_portal"],
+                "custom_colors": color_scheme_cfg["custom_colors"],
+            },
+            "temp_unit": cfg["display"]["temp_unit"],
         }
 
     def _build_module_summary(mod_id):
@@ -276,13 +459,16 @@ async def main():
         pairing_manager=pairing_mgr,
         pairing_command_handler=_handle_pairing_command,
         module_manager=module_mgr,
+        dismiss_sensor_alert_handler=_handle_dismiss_sensor_alert,
     )
 
     # --- Display screens ---
     def _screen_temp_humidity(d):
         t, h = latest["temp_f"], latest["humidity_pct"]
-        line = "{}F  {}%".format(
-            round(t) if t is not None else "--",
+        temp_val, temp_unit = _format_temp(t, cfg["display"]["temp_unit"])
+        line = "{}{}  {}%".format(
+            temp_val if temp_val is not None else "--",
+            temp_unit,
             round(h) if h is not None else "--",
         )
         d.draw_screen(icons.ICON_TEMP, "Temp/Hum", [line])
@@ -325,11 +511,24 @@ async def main():
         while True:
             dht_result = dht.read()
             temp_f, humidity_pct = dht_result if dht_result is not None else (None, None)
+            _update_sensor_failure_tracking("dht11", dht_result is None)
 
             soil_raw = soil.read_raw_averaged()
             soil_pct = soil.read_percent(
                 soil_raw, cfg["soil_calibration"]["dry_raw"], cfg["soil_calibration"]["wet_raw"]
             )
+            soil_calibrated = (
+                cfg["soil_calibration"]["dry_raw"] is not None
+                and cfg["soil_calibration"]["wet_raw"] is not None
+            )
+            # Gate on calibrated status, not just "is the reading None" -
+            # an uncalibrated sensor reading None is expected/normal, not
+            # a failure. Passing "soil_calibrated and soil_pct is None"
+            # (rather than skipping the call outright when uncalibrated)
+            # also correctly clears any previously-tracked failure if a
+            # sensor transitions from calibrated back to uncalibrated
+            # (e.g. mid-recalibration) - see _update_sensor_failure_tracking.
+            _update_sensor_failure_tracking("soil_moisture", soil_calibrated and soil_pct is None)
 
             light_raw = light.read_raw_averaged()
             light_fc = light.read_fc(
@@ -337,6 +536,8 @@ async def main():
                 cfg["light_calibration"]["dark_raw"], cfg["light_calibration"]["bright_raw"],
                 cfg["light_calibration"]["bright_fc"], cfg["light_calibration"]["calibrated"],
             )
+            light_calibrated = cfg["light_calibration"]["calibrated"]
+            _update_sensor_failure_tracking("light", light_calibrated and light_fc is None)
 
             light_level_label = None
             if cfg["light_mode"]["mode"] == "multi_point":
@@ -363,6 +564,17 @@ async def main():
                     # Interrupt publish - immediate, only on transition to red (see docs/ARCHITECTURE.md)
                     mqtt.publish_health(_build_health_payload())
 
+            sensor_alerts = _compute_sensor_alerts()
+            previous_sensor_alerts = latest["sensor_alerts"]
+            latest["sensor_alerts"] = sensor_alerts
+            led.set_alert(any(a["tier"] == "notify" and not a["dismissed"] for a in sensor_alerts))
+            if sensor_alerts != previous_sensor_alerts:
+                # Interrupt publish on any change (new alert, tier escalation,
+                # dismissal, recovery) - same "don't make HA wait up to
+                # publish_interval_s for something that just changed"
+                # reasoning as the health red-transition publish above.
+                mqtt.publish_health(_build_health_payload())
+
             if light_fc is not None:
                 tracker.record_sample(light_fc, cfg["thresholds"], cfg["light_tracking"])
 
@@ -382,6 +594,7 @@ async def main():
                 mqtt.publish_state({
                     "temp_f": latest["temp_f"], "humidity_pct": latest["humidity_pct"],
                     "soil_moisture_pct": latest["soil_moisture_pct"], "light_fc": latest["light_fc"],
+                    "light_level_label": latest["light_level_label"],
                 })
                 mqtt.publish_health(_build_health_payload())
             await asyncio.sleep(cfg["timing"]["publish_interval_s"])
@@ -403,6 +616,11 @@ async def main():
                 night_mode_active=night_active,
                 led_off_in_night_mode=night_cfg["led_off"],
                 red_overrides_led_off=night_cfg["red_overrides_led_off"],
+                health_colors=_resolve_health_colors(
+                    cfg["color_scheme"]["alert_led"], cfg["color_scheme"]["custom_colors"]
+                ),
+                idle_mode=cfg["status_led"]["idle_mode"],
+                idle_breathe_period_ms=cfg["status_led"]["idle_breathe_period_ms"],
             )
             await asyncio.sleep(0.2)
 
