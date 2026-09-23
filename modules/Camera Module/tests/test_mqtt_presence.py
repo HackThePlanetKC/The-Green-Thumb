@@ -22,9 +22,11 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import config as config_module  # noqa: E402
+from grid_config import GridConfigManager  # noqa: E402
 from mqtt_presence import CameraMqttPresence  # noqa: E402
 from per_base_settings import PerBaseSettingsManager  # noqa: E402
 from visual_disclaimers import FULL_DISCLAIMER  # noqa: E402
+from wilt_watch import WiltWatchManager  # noqa: E402
 
 failures = []
 
@@ -102,11 +104,20 @@ with tempfile.TemporaryDirectory() as d:
     config_path = os.path.join(d, "config.json")
     bound_config = ConfigAtPath(config_path)
     per_base_settings = PerBaseSettingsManager(bound_config)
+    grid_config = GridConfigManager(bound_config)
     association = FakeAssociation(["A1B2C3"])
+
+    # grid_config.set_grid() validates against config.json's own
+    # associated_base_ids - the FakeAssociation above is a separate,
+    # in-memory-only stand-in used for sync_associated_bases()/topic
+    # wiring, so it's written here too for the set_grid tests below.
+    seed_cfg = bound_config.load()
+    seed_cfg["associated_base_ids"] = ["A1B2C3"]
+    bound_config.save(seed_cfg)
 
     fake_client = FakeMqttClient()
     presence = CameraMqttPresence(
-        bound_config, association, per_base_settings, "CAM001",
+        bound_config, association, per_base_settings, grid_config, "CAM001",
         broker="test.local", port=1883, client_factory=lambda: fake_client,
     )
     presence.connect()
@@ -153,6 +164,50 @@ with tempfile.TemporaryDirectory() as d:
     presence.handle_message("greenthumb/camera/CAM001/global/command", json.dumps({"action": "set_config", "path": "capture.does_not_exist", "value": 1}))
     check("an unknown path under an allowed key is rejected (KeyError caught)", fake_client.published_to("greenthumb/camera/CAM001/global/config") == [])
 
+    # --- global set_config command: "grid" is no longer writable via the generic dotted-path setter -
+    # it needs real validation (bounds, associated-base checks) that set_by_path can't provide, so it's
+    # not in _GLOBAL_WHITELIST at all anymore - only the dedicated set_grid action (below) can write it ---
+    fake_client.published.clear()
+    presence.handle_message("greenthumb/camera/CAM001/global/command", json.dumps({"action": "set_config", "path": "grid.rows", "value": 3}))
+    check("grid.rows via the generic set_config action is rejected (grid removed from the whitelist)", bound_config.load()["grid"]["rows"] == 1)
+    check("a rejected grid set_config does not republish global/config", fake_client.published_to("greenthumb/camera/CAM001/global/config") == [])
+
+    # --- global set_grid command: valid dims + cells succeed, validated against associated_base_ids ---
+    fake_client.published.clear()
+    presence.handle_message("greenthumb/camera/CAM001/global/command", json.dumps({"action": "set_grid", "rows": 2, "cols": 2, "cells": {"0,0": "A1B2C3"}}))
+    check("a valid set_grid command updates the grid", grid_config.get_grid() == {"rows": 2, "cols": 2, "cells": {"0,0": "A1B2C3"}})
+    check("a successful set_grid republishes global/config", len(fake_client.published_to("greenthumb/camera/CAM001/global/config")) == 1)
+
+    # --- global set_grid command: an unassociated base_id is rejected, and rejected atomically (nothing partially applied) ---
+    fake_client.published.clear()
+    presence.handle_message("greenthumb/camera/CAM001/global/command", json.dumps({"action": "set_grid", "rows": 3, "cols": 3, "cells": {"0,0": "NOT_A_REAL_BASE"}}))
+    check("an invalid set_grid command (unassociated base) is rejected, leaving the grid unchanged", grid_config.get_grid() == {"rows": 2, "cols": 2, "cells": {"0,0": "A1B2C3"}})
+    check("a rejected set_grid does not republish global/config", fake_client.published_to("greenthumb/camera/CAM001/global/config") == [])
+
+    # --- global set_grid command: out-of-range dimensions are rejected ---
+    fake_client.published.clear()
+    presence.handle_message("greenthumb/camera/CAM001/global/command", json.dumps({"action": "set_grid", "rows": 0, "cols": 2, "cells": {}}))
+    check("an out-of-range set_grid dimension is rejected", grid_config.get_grid()["rows"] == 2)
+
+    # --- global set_grid command: malformed field types (not the expected int/int/dict shape) are rejected, not raised ---
+    fake_client.published.clear()
+    try:
+        presence.handle_message("greenthumb/camera/CAM001/global/command", json.dumps({"action": "set_grid", "rows": "two", "cols": 2, "cells": {}}))
+        raised_bad_types = False
+    except Exception:
+        raised_bad_types = True
+    check("a set_grid command with wrong field types doesn't raise", raised_bad_types is False)
+    check("a set_grid command with wrong field types doesn't republish global/config", fake_client.published_to("greenthumb/camera/CAM001/global/config") == [])
+
+    # --- handle_message: a non-dict JSON payload (valid JSON, not an object) is ignored, not raised ---
+    for bad_payload in ("null", "5", "[1, 2]", "\"just a string\""):
+        try:
+            presence.handle_message("greenthumb/camera/CAM001/global/command", bad_payload)
+            raised_non_dict = False
+        except Exception:
+            raised_non_dict = True
+        check("a non-dict JSON payload ({}) doesn't crash handle_message".format(bad_payload), raised_non_dict is False)
+
     # --- per-base set_metric command ---
     fake_client.published.clear()
     presence.handle_message("greenthumb/A1B2C3/module/CAM001/command", json.dumps({"action": "set_metric", "metric": "chlorosis", "enabled": True}))
@@ -184,10 +239,39 @@ with tempfile.TemporaryDirectory() as d:
     presence.disconnect()
     check("disconnect() stops the loop and disconnects", fake_client.loop_stopped is True and fake_client.disconnected is True)
 
+# --- per-base set_metric(wilt_watch) command wired to wilt_watch.has_reference(): doesn't
+# redundantly re-flag wilt_watch_config_necessary for a base that already has a reference ---
+with tempfile.TemporaryDirectory() as d3:
+    bound_config3 = ConfigAtPath(os.path.join(d3, "config.json"))
+    per_base3 = PerBaseSettingsManager(bound_config3)
+    wilt_watch3 = WiltWatchManager(per_base3, data_dir=os.path.join(d3, "data"))
+    grid_config3 = GridConfigManager(bound_config3)
+    seed_cfg3 = bound_config3.load()
+    seed_cfg3["associated_base_ids"] = ["A1B2C3", "D4E5F6"]
+    bound_config3.save(seed_cfg3)
+
+    from image_compare import GrayscaleImage  # noqa: E402
+    wilt_watch3.capture_reference("A1B2C3", GrayscaleImage(2, 2, [200, 200, 200, 200]))
+
+    fake_client3 = FakeMqttClient()
+    presence3 = CameraMqttPresence(
+        bound_config3, FakeAssociation(["A1B2C3", "D4E5F6"]), per_base3, grid_config3, "CAM003",
+        broker="test.local", client_factory=lambda: fake_client3, wilt_watch=wilt_watch3,
+    )
+    presence3.connect()
+
+    presence3.handle_message("greenthumb/A1B2C3/module/CAM003/command", json.dumps({"action": "set_metric", "metric": "wilt_watch", "enabled": True}))
+    check("enabling wilt_watch via MQTT for a base that already has a reference does NOT set config_necessary", per_base3.get_settings("A1B2C3")["wilt_watch_config_necessary"] is False)
+
+    presence3.handle_message("greenthumb/D4E5F6/module/CAM003/command", json.dumps({"action": "set_metric", "metric": "wilt_watch", "enabled": True}))
+    check("enabling wilt_watch via MQTT for a base with no reference yet DOES set config_necessary", per_base3.get_settings("D4E5F6")["wilt_watch_config_necessary"] is True)
+
 # --- connect() without a broker configured raises clearly ---
 with tempfile.TemporaryDirectory() as d2:
     bound_config2 = ConfigAtPath(os.path.join(d2, "config.json"))
-    presence_no_broker = CameraMqttPresence(bound_config2, FakeAssociation([]), PerBaseSettingsManager(bound_config2), "CAM002", broker=None)
+    presence_no_broker = CameraMqttPresence(
+        bound_config2, FakeAssociation([]), PerBaseSettingsManager(bound_config2), GridConfigManager(bound_config2), "CAM002", broker=None,
+    )
     try:
         presence_no_broker.connect()
         raised_no_broker = False

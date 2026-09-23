@@ -75,6 +75,51 @@ class GridConfigManager:
         }
         self._config_module.save(cfg)
 
+    def set_grid(self, rows, cols, cells):
+        """
+        Full-state replace: sets dimensions AND the complete cell map
+        together, in one load/validate/save cycle - every cell is
+        validated against the SAME loaded config snapshot before
+        anything is written, so an invalid dimension or an
+        unassociated base_id anywhere in `cells` raises ValueError
+        with nothing persisted at all, rather than partially applying
+        the change. `cells` is treated as the complete desired state
+        (same "always submit the full grid, not a diff" convention as
+        set_associated_base_ids()) - a key absent from it is
+        unassigned, and any key outside the new rows x cols bounds is
+        silently ignored (not an error - the caller doesn't need to
+        pre-filter its own out-of-bounds leftovers).
+
+        This is what both the web portal (POST /save_grid) and the
+        global MQTT command (action: set_grid) call, specifically so
+        both write paths share one validated implementation instead of
+        each reimplementing it - see decisions-and-practices.md for
+        the bugs this replaced: a per-cell loop of independent load/
+        save calls could partially apply a grid change even when the
+        request as a whole was invalid, and a raw dotted-path
+        config.set_by_path() write (mqtt_presence.py's old generic
+        set_config handler) had no validation at all.
+        """
+        if not (1 <= rows <= MAX_ROWS) or not (1 <= cols <= MAX_COLS):
+            raise ValueError("grid dimensions must be between 1 and {}x{}".format(MAX_ROWS, MAX_COLS))
+
+        cfg = self._config_module.load()
+        associated = set(cfg.get("associated_base_ids", []))
+        new_cells = {}
+        for row in range(rows):
+            for col in range(cols):
+                base_id = cells.get(_cell_key(row, col))
+                if not base_id:
+                    continue
+                if base_id not in associated:
+                    raise ValueError("{} is not an associated base".format(base_id))
+                new_cells[_cell_key(row, col)] = base_id
+
+        cfg["grid"]["rows"] = rows
+        cfg["grid"]["cols"] = cols
+        cfg["grid"]["cells"] = new_cells
+        self._config_module.save(cfg)
+
     def set_cell_assignment(self, row, col, base_id):
         """
         Assigns cell (row, col) to base_id, or unassigns it if base_id

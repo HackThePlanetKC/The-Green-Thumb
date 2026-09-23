@@ -57,7 +57,19 @@ with tempfile.TemporaryDirectory() as d:
     mgr.set_metric("A1B2C3", "wilt_watch", False)
     check("disabling wilt_watch doesn't set config_necessary", mgr.get_settings("A1B2C3")["wilt_watch_config_necessary"] is False)
     mgr.set_metric("A1B2C3", "wilt_watch", True)
-    check("re-enabling wilt_watch (after having been disabled) sets config_necessary again", mgr.get_settings("A1B2C3")["wilt_watch_config_necessary"] is True)
+    check("re-enabling wilt_watch with no has_reference check available (the default) re-sets config_necessary", mgr.get_settings("A1B2C3")["wilt_watch_config_necessary"] is True)
+
+    # --- has_reference: when a caller CAN check (e.g. web_portal.py/mqtt_presence.py, both of which
+    # have a WiltWatchManager handy), re-enabling wilt_watch for a base that already has a reference
+    # image must NOT spuriously re-flag config_necessary ---
+    mgr.clear_wilt_watch_config_necessary("A1B2C3")
+    mgr.set_metric("A1B2C3", "wilt_watch", False)
+    mgr.set_metric("A1B2C3", "wilt_watch", True, has_reference=lambda base_id: True)
+    check("re-enabling wilt_watch with has_reference=True does NOT re-set config_necessary", mgr.get_settings("A1B2C3")["wilt_watch_config_necessary"] is False)
+
+    mgr.set_metric("A1B2C3", "wilt_watch", False)
+    mgr.set_metric("A1B2C3", "wilt_watch", True, has_reference=lambda base_id: False)
+    check("re-enabling wilt_watch with has_reference=False still sets config_necessary", mgr.get_settings("A1B2C3")["wilt_watch_config_necessary"] is True)
 
     try:
         mgr.set_metric("A1B2C3", "general_health", False)

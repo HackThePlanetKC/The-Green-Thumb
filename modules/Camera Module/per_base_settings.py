@@ -66,7 +66,7 @@ class PerBaseSettingsManager:
         result.update(entry)
         return result
 
-    def set_metric(self, base_id, metric, enabled):
+    def set_metric(self, base_id, metric, enabled, has_reference=None):
         """
         Toggles one metric for one base. Raises ValueError for
         "general_health" (not toggleable - always on, see module
@@ -75,10 +75,18 @@ class PerBaseSettingsManager:
         creating a bogus config key.
 
         Turning wilt_watch on when this base has no stored reference
-        image yet sets wilt_watch_config_necessary - checked via
-        has_reference (injected, since this module doesn't own
-        wilt_watch's reference storage - see wilt_watch.py) so the
-        flag isn't set redundantly for a base that already has one.
+        image yet sets wilt_watch_config_necessary. has_reference, if
+        given, is a callable(base_id) -> bool (in practice
+        wilt_watch.WiltWatchManager.has_reference, injected since this
+        module doesn't own wilt_watch's reference storage - see
+        wilt_watch.py) so the flag isn't set redundantly for a base
+        that's toggled wilt_watch off and back on but already has a
+        reference from before. Callers with no way to check (has_
+        reference left as None) get the simpler, always-set-on-enable
+        behavior instead - re-prompting for a reference that already
+        exists is a mild UX rough edge, never a correctness problem
+        (capture_reference() just overwrites), so it's an acceptable
+        default for a caller that doesn't have a WiltWatchManager handy.
         """
         if metric == "general_health":
             raise ValueError("general_health is always on and cannot be toggled")
@@ -95,7 +103,8 @@ class PerBaseSettingsManager:
         entry[metric] = bool(enabled)
 
         if metric == "wilt_watch" and enabled and not was_enabled:
-            entry["wilt_watch_config_necessary"] = True
+            if has_reference is None or not has_reference(base_id):
+                entry["wilt_watch_config_necessary"] = True
 
         self._config_module.save(cfg)
 

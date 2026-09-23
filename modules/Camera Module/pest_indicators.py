@@ -57,8 +57,19 @@ from detector_common import color_outlier_mask, compute_leaf_mask, confidence_fr
 _CONFIDENCE_CAP = 0.7
 
 
-def _empty_sub_result():
-    return {"detected": False, "confidence": 0.0}
+def _empty_sub_result(extra_key, extra_value):
+    """
+    A distinct dict per call (never share one instance across sub-
+    checks - see the total_leaf==0 branch below, which previously
+    aliased the SAME dict object under all three keys, so mutating one
+    would have silently corrupted the others). Takes the sub-check-
+    specific extra field (edge_density for webbing, component_count
+    for pest_clusters/stippling) so this shape always matches the
+    normal (non-empty) result each _detect_* function returns, rather
+    than a caller getting a different set of keys depending on whether
+    leaf_area happened to be zero.
+    """
+    return {"detected": False, "confidence": 0.0, extra_key: extra_value}
 
 
 def _detect_webbing(bgr_image, leaf_mask, total_leaf, cfg):
@@ -136,8 +147,14 @@ def detect_pest_indicators(bgr_image, cfg):
     leaf_mask = compute_leaf_mask(bgr_image)
     total_leaf = leaf_area(leaf_mask)
     if total_leaf == 0:
-        empty = _empty_sub_result()
-        return {"detected": False, "triggered": [], "confidence": 0.0, "webbing": empty, "pest_clusters": empty, "stippling": empty}
+        return {
+            "detected": False,
+            "triggered": [],
+            "confidence": 0.0,
+            "webbing": _empty_sub_result("edge_density", 0.0),
+            "pest_clusters": _empty_sub_result("component_count", 0),
+            "stippling": _empty_sub_result("component_count", 0),
+        }
 
     webbing = _detect_webbing(bgr_image, leaf_mask, total_leaf, cfg["webbing"])
     pest_clusters = _detect_pest_clusters(bgr_image, leaf_mask, total_leaf, cfg["pest_clusters"])

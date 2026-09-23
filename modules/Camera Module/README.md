@@ -62,6 +62,8 @@ Once WiFi + broker are both configured, [`static/associate.html`](static/associa
 
 `cell_pixel_bbox(base_id, image_width, image_height)` maps a base's assigned cell(s) to a pixel bounding box against a given photo's dimensions - used by the wilt-watch reference-capture flow (below) to know which crop belongs to which base.
 
+`set_grid(rows, cols, cells)` applies a full grid change (dimensions + the complete cell map) in one atomic load/validate/save - every cell is checked against the associated-base list before anything is written, so an invalid request changes nothing at all rather than partially applying. Both the web portal's `POST /save_grid` and the global MQTT `set_grid` command (see below) call this one method, rather than each looping over individual `set_grid_dimensions()`/`set_cell_assignment()` calls (still available individually, and what `set_grid()` itself is built from, but calling them one cell at a time from a request handler was a real bug caught by review - a validation failure partway through the loop could leave earlier cells' writes already persisted).
+
 Grid config is **module-global**: stored in this module's own config, editable only via the camera portal or HA - never from an individual base's own portal.
 
 ## Settings scoping
@@ -120,7 +122,7 @@ Detectors require OpenCV + numpy (`pip install opencv-python-headless numpy` on 
 - `greenthumb/camera/<camera_id>/global/{status,device_info,config,command}` - module-global settings ONLY. One minimal HA device card for the camera module itself; per-base health/metric data never appears here.
 - `greenthumb/<base_id>/module/<camera_id>/{status,state,command}` - per-base settings, reusing the base station's own documented `module/<mod_id>/*` topic shape so each base's settings attach to that base's own existing HA device, published directly by this module (not relayed by the base, since this module isn't BLE-paired - see `docs/ARCHITECTURE.md`).
 
-The global `command` topic accepts a generic `set_config` ({"action": "set_config", "path": ..., "value": ...}, mirroring `core/mqtt_client.py`'s own handler shape) restricted to a whitelist of top-level keys (`capture`, `grid`, `flash`) - it can never touch this module's own WiFi/broker credentials or association list. Per-base `command` topics accept a narrower `set_metric` ({"action": "set_metric", "metric": ..., "enabled": ...}) instead.
+The global `command` topic accepts a generic `set_config` ({"action": "set_config", "path": ..., "value": ...}, mirroring `core/mqtt_client.py`'s own handler shape) restricted to a whitelist of top-level keys (`capture`, `flash`) - it can never touch this module's own WiFi/broker credentials or association list. `grid` is deliberately excluded from that whitelist: dimensions/cell assignments need real validation (bounds, associated-base checks) a raw dotted-path setter can't provide, so grid edits instead use a dedicated `set_grid` action ({"action": "set_grid", "rows": ..., "cols": ..., "cells": ...}), routed through [`grid_config.py`](grid_config.py)'s `set_grid()` - the same atomic, validated method the web portal's `/save_grid` route uses, so both write paths share one implementation instead of each reimplementing (and potentially diverging on) validation. Per-base `command` topics accept a narrower `set_metric` ({"action": "set_metric", "metric": ..., "enabled": ...}) instead.
 
 ## Web portal
 

@@ -108,6 +108,24 @@ coating_pest_result = detect_pest_indicators(canvas_coating, CFG)
 check("a genuine contiguous mildew coating does NOT trigger the stippling sub-check", coating_pest_result["stippling"]["detected"] is False)
 check("that same coating IS correctly detected as powdery mildew", _dpm(canvas_coating, MILDEW_CFG)["detected"] is True)
 
+# --- total_leaf == 0 (no leaf detected at all, e.g. lens cap/blown-out frame): each sub-check
+# gets its OWN dict (not one shared/aliased object across all three), matching the normal
+# (non-empty) result shape so a consumer reading e.g. result["pest_clusters"]["component_count"]
+# doesn't KeyError just because this particular capture had no leaf area ---
+from synthetic_images import BACKGROUND_BGR  # noqa: E402
+
+no_leaf_canvas = solid_canvas(50, 50, BACKGROUND_BGR)
+empty_result = detect_pest_indicators(no_leaf_canvas, CFG)
+check("no-leaf-detected frame is not detected overall", empty_result["detected"] is False)
+check("no-leaf-detected frame's webbing sub-result has the same shape as a normal one (edge_density key)", "edge_density" in empty_result["webbing"])
+check("no-leaf-detected frame's pest_clusters sub-result has the same shape as a normal one (component_count key)", "component_count" in empty_result["pest_clusters"])
+check("no-leaf-detected frame's stippling sub-result has the same shape as a normal one (component_count key)", "component_count" in empty_result["stippling"])
+check("the three empty sub-results are NOT the same aliased dict object", empty_result["webbing"] is not empty_result["pest_clusters"] and empty_result["pest_clusters"] is not empty_result["stippling"])
+
+# mutating one sub-result must not affect the others (would fail if they were aliased)
+empty_result["webbing"]["detected"] = True
+check("mutating one sub-result's dict doesn't leak into the others (not aliased)", empty_result["pest_clusters"]["detected"] is False and empty_result["stippling"]["detected"] is False)
+
 print()
 if failures:
     print("{} check(s) failed: {}".format(len(failures), failures))

@@ -48,8 +48,8 @@ def main():
     wilt_watch = WiltWatchManager(per_base_settings)
     drama_level = DramaLevelManager()  # not yet called anywhere - see module docstring; kept ready for capture scheduling to use
     presence = CameraMqttPresence(
-        config_module, association, per_base_settings, camera_id,
-        broker=cfg["mqtt"]["broker"] or None, port=cfg["mqtt"]["port"],
+        config_module, association, per_base_settings, grid_config, camera_id,
+        broker=cfg["mqtt"]["broker"] or None, port=cfg["mqtt"]["port"], wilt_watch=wilt_watch,
     )
 
     ready = wifi_mgr.has_credentials() and bool(cfg["mqtt"]["broker"])

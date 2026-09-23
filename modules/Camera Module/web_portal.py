@@ -206,10 +206,14 @@ def make_handler(
             """
             Full-state replace, same convention as _handle_save_association:
             the request always carries the complete desired dims + cell
-            map, not an incremental diff - every cell within the new
-            grid bounds is explicitly set (to a base_id or cleared),
-            so a cell simply omitted from `cells` is correctly treated
-            as unassigned rather than silently keeping a stale value.
+            map, not an incremental diff - a cell omitted from `cells`
+            is correctly treated as unassigned rather than silently
+            keeping a stale value. Routed through grid_config.set_grid()
+            (one atomic load/validate/save) rather than
+            set_grid_dimensions() + a per-cell set_cell_assignment()
+            loop - the old per-cell-call version could partially persist
+            a grid change (dimensions saved, then a later cell rejected)
+            even though the request as a whole gets reported as failed.
             """
             try:
                 rows = int(fields.get("rows", ""))
@@ -225,11 +229,7 @@ def make_handler(
                 return
 
             try:
-                grid_config.set_grid_dimensions(rows, cols)
-                for row in range(rows):
-                    for col in range(cols):
-                        key = "{},{}".format(row, col)
-                        grid_config.set_cell_assignment(row, col, cells.get(key) or None)
+                grid_config.set_grid(rows, cols, cells)
             except ValueError as e:
                 self._send_json({"success": False, "error": str(e)}, status=400)
                 return
@@ -262,7 +262,7 @@ def make_handler(
 
             enabled = fields.get("enabled") == "true"
             try:
-                per_base_settings.set_metric(base_id, metric, enabled)
+                per_base_settings.set_metric(base_id, metric, enabled, has_reference=wilt_watch.has_reference)
             except ValueError as e:
                 self._send_json({"success": False, "error": str(e)}, status=400)
                 return

@@ -63,20 +63,26 @@ except ImportError:  # only required on the real Pi (pip install paho-mqtt)
 
 TOPIC_PREFIX = "greenthumb"
 
-# The only config.py top-level keys the global/command topic is ever
-# allowed to touch. Anything else (wifi, mqtt broker credentials,
-# associated_base_ids, per_base_settings) is rejected before
-# set_by_path() is even called - a global HA command channel must
-# never be able to rewrite this module's own WiFi/broker credentials
-# or association list, only the module-global settings it's actually
-# meant to expose.
-_GLOBAL_WHITELIST = ("capture", "grid", "flash")
+# The only config.py top-level keys the global/command topic's generic
+# set_config action is ever allowed to touch. Anything else (wifi,
+# mqtt broker credentials, associated_base_ids, per_base_settings) is
+# rejected before set_by_path() is even called - a global HA command
+# channel must never be able to rewrite this module's own WiFi/broker
+# credentials or association list, only the module-global settings
+# it's actually meant to expose. "grid" is deliberately NOT here even
+# though it's module-global (see config.py) - grid dimensions/cell
+# assignments need real validation (bounds, associated-base checks -
+# see grid_config.GridConfigManager) that a raw dotted-path setter
+# can't provide, so grid edits go through the dedicated set_grid
+# action below instead, same reasoning as set_metric existing as a
+# narrower alternative to the dotted-path setter for per-base settings.
+_GLOBAL_WHITELIST = ("capture", "flash")
 
 
 class CameraMqttPresence:
     def __init__(
-        self, config_module, association, per_base_settings, camera_id,
-        broker=None, port=1883, client_id=None, client_factory=None,
+        self, config_module, association, per_base_settings, grid_config, camera_id,
+        broker=None, port=1883, client_id=None, client_factory=None, wilt_watch=None,
     ):
         """
         config_module: exposes load()/save() - see config.py. Same
@@ -88,10 +94,23 @@ class CameraMqttPresence:
         per_base_settings: a PerBaseSettingsManager - source of truth
         for each base's settings snapshot, and the target of any
         set_metric command received on a base's command topic.
+        grid_config: a GridConfigManager - the target of the global
+        command topic's set_grid action (see _handle_global_set_grid).
+        wilt_watch: optional WiltWatchManager, passed through to
+        per_base_settings.set_metric()'s has_reference check when a
+        base's set_metric command enables wilt_watch (see
+        per_base_settings.py's own docstring for why this avoids
+        spuriously re-flagging wilt_watch_config_necessary for a base
+        that already has a reference image). Left as None, a set_metric
+        command always sets the flag on enable - a caller that doesn't
+        have a WiltWatchManager handy still gets safe, just slightly
+        less precise, behavior.
         """
         self._config_module = config_module
         self._association = association
         self._per_base_settings = per_base_settings
+        self._grid_config = grid_config
+        self._wilt_watch = wilt_watch
         self._camera_id = camera_id
         self._broker = broker
         self._port = port
@@ -227,6 +246,13 @@ class CameraMqttPresence:
             data = json.loads(payload)
         except (ValueError, TypeError):
             return
+        if not isinstance(data, dict):
+            # Valid JSON (e.g. "null", "5", "[1,2]") that isn't an
+            # object has no "action" key to read - treated the same as
+            # malformed JSON (ignored, not raised), rather than letting
+            # payload.get() below crash with AttributeError inside the
+            # MQTT callback.
+            return
 
         if topic == self._global_topic("command"):
             self._handle_global_command(data)
@@ -238,19 +264,31 @@ class CameraMqttPresence:
 
     def _handle_global_command(self, payload):
         """
-        Mirrors core/mqtt_client.py's generic set_config command
-        handler shape ({"action": "set_config", "path": ..., "value":
-        ...}), restricted to _GLOBAL_WHITELIST's top-level keys. An
-        unknown/disallowed path, or any action other than set_config,
-        is rejected silently - same "no ack/error topic, the retained
-        config topic just doesn't change" contract as the base
-        station's own handler.
+        Two actions on this topic:
+        - set_config ({"path": ..., "value": ...}) mirrors core/
+          mqtt_client.py's generic handler shape, restricted to
+          _GLOBAL_WHITELIST's top-level keys (capture, flash - simple
+          scalar leaf values with no cross-field validation needed).
+        - set_grid ({"rows": ..., "cols": ..., "cells": ...}) - see
+          _handle_global_set_grid(), routed through
+          grid_config.GridConfigManager.set_grid() instead, since grid
+          edits need real validation a dotted-path setter can't provide.
+
+        An unknown/disallowed path, an invalid grid, or any other
+        action, is rejected silently - same "no ack/error topic, the
+        retained config topic just doesn't change" contract as the
+        base station's own handler.
         """
-        if payload.get("action") != "set_config":
+        action = payload.get("action")
+        if action == "set_grid":
+            self._handle_global_set_grid(payload)
             return
+        if action != "set_config":
+            return
+
         path = payload.get("path")
         value = payload.get("value")
-        if path is None:
+        if not isinstance(path, str):
             return
         if path.split(".")[0] not in _GLOBAL_WHITELIST:
             return
@@ -264,6 +302,19 @@ class CameraMqttPresence:
         if self._client is not None:
             self.publish_global_config()
 
+    def _handle_global_set_grid(self, payload):
+        rows = payload.get("rows")
+        cols = payload.get("cols")
+        cells = payload.get("cells")
+        if not isinstance(rows, int) or not isinstance(cols, int) or not isinstance(cells, dict):
+            return
+        try:
+            self._grid_config.set_grid(rows, cols, cells)
+        except ValueError:
+            return
+        if self._client is not None:
+            self.publish_global_config()
+
     def _handle_base_command(self, base_id, payload):
         """{"action": "set_metric", "metric": ..., "enabled": ...} - the only command this topic accepts (a narrower shape than the global command's dotted-path setter, since a base can only ever toggle its own metric set, see per_base_settings.py)."""
         if payload.get("action") != "set_metric":
@@ -272,8 +323,9 @@ class CameraMqttPresence:
         enabled = payload.get("enabled")
         if metric is None or enabled is None:
             return
+        has_reference = self._wilt_watch.has_reference if self._wilt_watch is not None else None
         try:
-            self._per_base_settings.set_metric(base_id, metric, bool(enabled))
+            self._per_base_settings.set_metric(base_id, metric, bool(enabled), has_reference=has_reference)
         except ValueError:
             return  # unknown/non-toggleable metric - rejected silently, same contract as above
         self.publish_base_state(base_id)

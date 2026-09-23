@@ -96,6 +96,45 @@ with tempfile.TemporaryDirectory() as d:
     check("cell_pixel_bbox() covers the top row of a 2x2 grid on a 200x200 image", bbox == (0, 0, 200, 100))
     check("cell_pixel_bbox() for an unassigned base returns None", grid2.cell_pixel_bbox("NOBODY", 200, 200) is None)
 
+    # --- set_grid(): full-state replace in one atomic call ---
+    path3 = os.path.join(d, "config3.json")
+    bound3 = ConfigAtPath(path3)
+    grid3 = GridConfigManager(bound3)
+    assoc3 = BaseAssociationManager(bound3)
+    assoc3.set_associated_base_ids(["A1B2C3", "D4E5F6"])
+
+    grid3.set_grid(2, 2, {"0,0": "A1B2C3", "0,1": "A1B2C3", "1,0": "D4E5F6"})
+    check("set_grid() applies dimensions and the full cell map together", grid3.get_grid() == {"rows": 2, "cols": 2, "cells": {"0,0": "A1B2C3", "0,1": "A1B2C3", "1,0": "D4E5F6"}})
+
+    # a later call with a cell omitted clears it, rather than leaving it stale (full-state replace, not a diff)
+    grid3.set_grid(2, 2, {"0,0": "D4E5F6"})
+    check("set_grid() clears a cell omitted from a later call", grid3.get_grid()["cells"] == {"0,0": "D4E5F6"})
+
+    # an invalid dimension is rejected before anything is written
+    before = grid3.get_grid()
+    try:
+        grid3.set_grid(0, 2, {})
+        raised = False
+    except ValueError:
+        raised = True
+    check("set_grid() rejects an out-of-range dimension", raised)
+    check("a rejected set_grid() dimension leaves the grid completely unchanged", grid3.get_grid() == before)
+
+    # an unassociated base_id anywhere in cells is rejected ATOMICALLY - nothing (not even the valid
+    # cells earlier in the dict, not even the new dimensions) is persisted, unlike the old per-cell-call
+    # approach this replaced, which could partially apply a change before hitting an invalid cell
+    try:
+        grid3.set_grid(2, 2, {"0,0": "A1B2C3", "1,1": "NOT_A_REAL_BASE"})
+        raised = False
+    except ValueError:
+        raised = True
+    check("set_grid() rejects an unassociated base_id anywhere in cells", raised)
+    check("a rejected set_grid() call leaves the grid completely unchanged (atomic, not partial)", grid3.get_grid() == before)
+
+    # a cell key outside the new bounds is silently ignored, not an error - callers don't need to pre-filter
+    grid3.set_grid(1, 1, {"0,0": "A1B2C3", "5,5": "D4E5F6"})
+    check("set_grid() silently ignores an out-of-bounds cell key rather than raising", grid3.get_grid() == {"rows": 1, "cols": 1, "cells": {"0,0": "A1B2C3"}})
+
 print()
 if failures:
     print("{} check(s) failed: {}".format(len(failures), failures))
