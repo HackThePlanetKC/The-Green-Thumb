@@ -37,6 +37,11 @@ DEFAULT_CONFIG = {
         # the base station's status_led.brightness (different LED
         # hardware entirely), see ring.py.
         "brightness": 0.5,
+        # Module-global on/off for the whole flash subsystem (added
+        # alongside grid/settings work) - lets a user disable the ring
+        # entirely (e.g. if it's causing glare, see BUILD.md) without
+        # losing the tuned threshold/brightness values underneath.
+        "enabled": True,
     },
     "wifi": {
         # Same shape as the base station's own core/config.py wifi
@@ -66,6 +71,105 @@ DEFAULT_CONFIG = {
     # base_association.py for why) this camera module is associated
     # with. Empty until the user completes the association step.
     "associated_base_ids": [],
+    "capture": {
+        # How often a scheduled capture runs, per day. Capture
+        # scheduling itself isn't built yet (see README.md
+        # "Remaining") - this is the setting a future scheduler will
+        # read, exposed now so it has one home in config/MQTT/HA from
+        # the start rather than being bolted on later.
+        "frequency_per_day": 2,
+    },
+    # Grid layout: how the camera's frame is divided into regions, and
+    # which associated base each region belongs to. Module-global (see
+    # grid_config.py) - editable only via the camera portal or HA, not
+    # any individual base's portal (see docs/ARCHITECTURE.md).
+    "grid": {
+        "rows": 1,
+        "cols": 1,
+        # "row,col" (0-indexed) -> base_id. A cell absent from this
+        # dict is unassigned. Deliberately a flat dict keyed by a
+        # string cell coordinate, not a 2D list - JSON object keys
+        # must be strings anyway, and a flat dict means an unassigned
+        # cell simply has no entry rather than needing an explicit
+        # null placeholder in a full rows*cols grid.
+        "cells": {},
+    },
+    # Per-base opt-in metric settings, keyed by base_id (a flat dict
+    # under this one key, not separate top-level keys per base - keeps
+    # _deep_merge_defaults simple, and there's no fixed set of base_ids
+    # to enumerate in DEFAULT_CONFIG ahead of time). general_health is
+    # NOT stored here - it's always on and not user-toggleable, see
+    # per_base_settings.py. Each entry, once a base has any setting
+    # touched, has the shape:
+    #   {"chlorosis": bool, "necrosis": bool, "spotting": bool,
+    #    "leaf_scorch": bool, "powdery_mildew": bool,
+    #    "pest_indicators": bool, "wilt_watch": bool,
+    #    "drama_level": bool, "wilt_watch_config_necessary": bool}
+    "per_base_settings": {},
+    # Thresholds/sensitivity for the six heuristic visual detectors
+    # (chlorosis.py, necrosis.py, spotting.py, leaf_scorch.py,
+    # powdery_mildew.py, pest_indicators.py). Module-global, not
+    # per-base, even though each detector's ENABLED toggle is per-base
+    # (per_base_settings.py) - a deliberate interpretation where the
+    # task's own instruction ("consistent with existing threshold
+    # config patterns in the project") pointed one way, since every
+    # existing threshold in this project (flash.low_light_threshold,
+    # the base station's own sensor thresholds) is module/device-
+    # global, not per-base. See decisions-and-practices.md. Sane
+    # starting defaults, not sourced from a dataset - same "adjustable,
+    # not fixed, tune once pointed at real plants" spirit as this
+    # module's other thresholds.
+    "detectors": {
+        "chlorosis": {
+            "green_hue_min": 35,        # OpenCV hue 0-179; healthy-green reference band
+            "green_hue_max": 85,
+            "std_dev_multiplier": 1.5,  # how far below the reference green's mean hue counts as "shifted"
+            "yellow_hue_floor": 15,     # excludes red/brown/orange - keeps this detector out of necrosis/scorch territory
+            "saturation_min": 60,       # excludes washed-out/desaturated pixels
+            "affected_threshold_pct": 5.0,
+        },
+        "necrosis": {
+            "saturation_max": 60,
+            "value_max": 90,
+            "affected_threshold_pct": 3.0,
+        },
+        "spotting": {
+            "color_distance_threshold": 40,  # LAB Euclidean distance from the leaf's own mean color
+            "min_lesion_area_px": 30,        # deliberately larger than pest_clusters/stippling's minimums - "few larger lesions"
+            "min_lesion_count": 1,
+            "affected_threshold_pct": 2.0,
+        },
+        "leaf_scorch": {
+            "saturation_max": 60,
+            "value_max": 100,
+            "margin_band_fraction": 0.15,  # outer 15% (by distance-from-edge, not area) of the leaf
+            "affected_threshold_pct": 10.0,
+        },
+        "powdery_mildew": {
+            "saturation_max": 40,
+            "value_min": 180,
+            "texture_variance_min": 15.0,  # per-pixel Laplacian magnitude
+            "affected_threshold_pct": 5.0,
+        },
+        "pest_indicators": {
+            "webbing": {
+                "canny_low": 50,
+                "canny_high": 150,
+                "edge_density_min": 0.03,
+            },
+            "pest_clusters": {
+                "color_distance_threshold": 40,
+                "max_component_area_px": 25,  # deliberately smaller than spotting.py's minimum - "many small objects"
+                "min_component_count": 8,
+            },
+            "stippling": {
+                "saturation_max": 50,
+                "value_min": 170,
+                "max_component_area_px": 10,
+                "min_component_count": 15,
+            },
+        },
+    },
 }
 
 
@@ -106,6 +210,32 @@ def save(config, path=CONFIG_PATH):
     with open(tmp_path, "w") as f:
         json.dump(config, f)
     os.replace(tmp_path, path)
+
+
+def set_by_path(config, path, value):
+    """
+    Writes a nested config value using dot notation - same semantics as
+    the base station's own core/config.py set_by_path(): raises
+    KeyError if the path (including the final key) doesn't already
+    exist, so a malformed MQTT command can't inject arbitrary config
+    structure. Does not save to disk - caller calls save() after.
+
+    Used by mqtt_presence.py's global set_config command handler,
+    which additionally restricts which top-level keys it will forward
+    here at all (see that file) - this function itself has no
+    awareness of "global vs per-base vs credentials", it just writes
+    to an existing path.
+    """
+    keys = path.split(".")
+    node = config
+    for key in keys[:-1]:
+        if not isinstance(node, dict) or key not in node:
+            raise KeyError(path)
+        node = node[key]
+    last_key = keys[-1]
+    if not isinstance(node, dict) or last_key not in node:
+        raise KeyError(path)
+    node[last_key] = value
 
 
 def _copy(d):
