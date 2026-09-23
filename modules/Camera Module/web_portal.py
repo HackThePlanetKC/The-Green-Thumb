@@ -36,6 +36,7 @@ from urllib.parse import parse_qs
 
 from camera_capture import capture_still as _real_capture_still
 from image_compare import load_grayscale_from_file as _real_load_image_from_file
+from visual_disclaimers import FULL_DISCLAIMER
 
 _STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 _DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
@@ -358,6 +359,13 @@ def make_handler(
                 flash_enabled="true" if current["flash"]["enabled"] else "false",
                 flash_threshold=str(current["flash"]["low_light_threshold"]),
                 per_base_json=_safe_json_for_script(per_base_rows),
+                # Item 8: the FULL disclaimer belongs on this settings
+                # page (where the six detector toggles live) - once,
+                # not duplicated per-base or per-detector. html.escape()
+                # even though this is a fixed constant, not user data -
+                # cheap insurance, consistent with this file's existing
+                # caution around anything rendered into HTML.
+                detector_disclaimer=html.escape(FULL_DISCLAIMER),
             )
 
         def _send_grid_reference(self):

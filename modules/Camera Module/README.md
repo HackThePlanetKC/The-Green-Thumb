@@ -69,9 +69,39 @@ Grid config is **module-global**: stored in this module's own config, editable o
 [`per_base_settings.py`](per_base_settings.py) splits settings into two tiers:
 
 - **Module-global** (camera portal + HA only, never a base's own portal): capture frequency (`capture.frequency_per_day`, default 2x/day), grid layout/assignment (above), and flash on/off + low-light threshold (`flash.enabled`, `flash.low_light_threshold`).
-- **Per-base** (camera portal + HA - see [`static/settings.html`](static/settings.html)), keyed by `base_id`: general health (always on - not a stored/toggleable setting, since there's no value in persisting something that can never be anything but `True`) plus five independent opt-ins: `chlorosis`, `necrosis`, `spotting`, `wilt_watch`, `drama_level`. Enabling one never implies another.
+- **Per-base** (camera portal + HA - see [`static/settings.html`](static/settings.html)), keyed by `base_id`: general health (always on - not a stored/toggleable setting, since there's no value in persisting something that can never be anything but `True`) plus eight independent opt-ins: `chlorosis`, `necrosis`, `spotting`, `leaf_scorch`, `powdery_mildew`, `pest_indicators` (the six heuristic visual detectors, see below), `wilt_watch`, `drama_level`. Enabling one never implies another.
 
 **A given base's own local portal editing only its own settings (full three-way parity: camera portal, that base's own portal, HA) is explicitly NOT built here.** The base firmware's local portal has no mechanism to subscribe to or render MQTT data from a module it isn't BLE-paired with - closing that gap is base-firmware work (`core/`, `web/server.py`) with its own scope/version bump, not authorized under this task. See `decisions-and-practices.md` and `docs/ARCHITECTURE.md`'s matching Future Enhancements entry.
+
+Detector thresholds/sensitivity (below) are **module-global**, not per-base, even though each detector's on/off toggle above is per-base - see `decisions-and-practices.md` for why (the project's only existing threshold pattern is module/device-global, so that's what "consistent with existing patterns" pointed to).
+
+## Heuristic visual detectors
+
+Six single-frame, absolute (no reference/previous-capture comparison - that's wilt-watch/drama-level's job, below) color/texture detectors, all species-agnostic, heuristic/rule-based OpenCV analysis - **not** an ML classifier and **not** trained on an external dataset. Each is one of the per-base opt-ins above. Every result dict includes at least `detected` (bool) and `confidence` (0.0-1.0); most also include an `affected_area_pct` (or `affected_margin_pct`/`lesion_count` where that fits better).
+
+| File | Detector | How | Output |
+|---|---|---|---|
+| [`chlorosis.py`](chlorosis.py) | Chlorosis (yellowing) | HSV; flags pixels shifted toward yellow relative to THIS photo's own healthy-green reference population (mean/std-dev of hue), not a fixed absolute yellow window | `affected_area_pct` |
+| [`necrosis.py`](necrosis.py) | Necrosis (dead/dying tissue) | Low-saturation dark/brown/grey/black patch detection ([`discoloration.py`](discoloration.py)'s shared primitive), measured uniformly across the whole leaf | `affected_area_pct` |
+| [`spotting.py`](spotting.py) | Spots/lesions | LAB color-outlier connected-component analysis, tuned for a FEW LARGER lesions (higher min area, no count requirement) | `lesion_count` + `affected_area_pct` |
+| [`leaf_scorch.py`](leaf_scorch.py) | Leaf scorch | Reuses necrosis's exact color primitive, weighted by distance-from-margin (`cv2.distanceTransform`, normalized per-leaf) instead of measured uniformly - the one thing distinguishing it from necrosis | `affected_margin_pct` |
+| [`powdery_mildew.py`](powdery_mildew.py) | Powdery mildew | Requires BOTH a light/white color signal AND a texture signal (per-pixel Laplacian magnitude) together - neither alone is enough | `affected_area_pct` |
+| [`pest_indicators.py`](pest_indicators.py) | Pest indicators (one grouped toggle, three sub-checks) | **webbing**: Canny edge density. **pest_clusters**: spotting's own LAB color-outlier primitive, tuned the OPPOSITE way (many small components, a minimum count). **stippling**: many small discrete light components, color-only, no texture check | `triggered` (list of which sub-check(s) fired) + per-sub-check detail |
+
+**Distinguishing powdery mildew from pest_indicators' stippling** (both are "light speckling" and can visually overlap - documented explicitly per this task's own requirement): mildew requires texture (a Laplacian signal) on top of color and treats the result as one or a few fairly contiguous coated regions; stippling uses color only and instead distinguishes itself by connected-component size - many small, separate, discrete dots rather than a contiguous area. See [`pest_indicators.py`](pest_indicators.py)'s own module docstring and [`tests/test_pest_indicators.py`](tests/test_pest_indicators.py), which demonstrates both directions (a dot pattern scores low on mildew; a genuine coating doesn't register as stippling).
+
+**Pest indicators' confidence is deliberately capped below the other detectors' 1.0 ceiling** (all three sub-checks) - dust, fibers, and ordinary leaf texture can trigger signals structurally similar to webbing/stippling, so even a strong raw signal there is reported as less certain than an equally strong chlorosis/necrosis/etc. reading. A documented, conservative choice, not a claim that stronger evidence doesn't exist.
+
+Shared building blocks ([`detector_common.py`](detector_common.py)): `compute_leaf_mask()` (a broad "is this plant tissue, not background" HSV heuristic - deliberately not green-only, since a chlorotic/necrotic/mildew-coated region must still count as leaf; two documented known limitations - non-white/black background clutter can be misclassified as leaf, and the near-white/near-black background exclusion can itself exclude a severe mildew coating or truly black necrotic tissue, see that function's own docstring), `color_outlier_mask()` (the shared LAB primitive spotting/pest_clusters both use), and `confidence_from_ratio()` (shared 0.0-1.0 confidence curve). **Every detector result value is explicitly cast to a native Python type** - a real bug caught by this module's own tests: numpy arithmetic can produce `np.bool_`/`np.float64` values that aren't identical to Python's `True`/float by identity and aren't JSON-serializable (which matters once results are published over MQTT); see `detector_common.py`'s module docstring.
+
+### Disclaimer (two-tier)
+
+[`visual_disclaimers.py`](visual_disclaimers.py) defines both tiers once, referenced everywhere - never duplicated inline:
+
+- `FULL_DISCLAIMER` - shown on settings pages where these detectors are configured: this module's own `/settings` page, and published as a `detector_disclaimer` field on each base's MQTT state topic (`greenthumb/<base_id>/module/<camera_id>/state`) for HA's settings view. Not shown on a base's own local portal, since that portal doesn't exist for this data (see Settings scoping above).
+- `SHORT_DISCLAIMER` ("Heuristic detection, not a diagnosis.") - for wherever a detection *result* is eventually surfaced (dashboard, notification, HA entity state). No such surface exists yet - capture scheduling and result publishing aren't built (see Status below) - but the constant is defined now so that code has one source to reference instead of inventing its own wording later.
+
+Detectors require OpenCV + numpy (`pip install opencv-python-headless numpy` on the real Pi) - a new dependency for this module, on top of `rpi_ws281x`, `paho-mqtt`, and Pillow. Import-guarded the same way (`detector_common.py` raises a clear `RuntimeError` if called without them installed), but unlike those other guarded dependencies, this module's own tests for the six detectors DO require the real libraries installed - see Tests below.
 
 ## Wilt-watch and drama-level
 
@@ -116,19 +146,20 @@ No long-lived shared config dict is held in this file - every handler does its o
 | `grid.rows` / `grid.cols` | `1` / `1` | Module-global grid dimensions, 1-4 each independently - see [Grid layout](#grid-layout). |
 | `grid.cells` | `{}` | Module-global. `"row,col"` (0-indexed) -> `base_id`; a cell absent from this dict is unassigned. |
 | `per_base_settings` | `{}` | Keyed by `base_id` - see [Settings scoping](#settings-scoping). |
+| `detectors.*` | see `config.py` | Module-global thresholds/sensitivity for the six heuristic visual detectors, one sub-dict per detector (`detectors.pest_indicators` further nests `webbing`/`pest_clusters`/`stippling`). Sane starting defaults, not sourced from a dataset - see [Heuristic visual detectors](#heuristic-visual-detectors) above and `decisions-and-practices.md` for why these are module-global rather than per-base. |
 
 ## Status
 
-**WiFi setup, MQTT discovery/base association, grid layout, settings scoping, wilt-watch, drama-level, and this module's own top-level MQTT/HA presence are all built.** The flash subsystem (ring driver, trigger logic) was built first. Not yet built:
+**WiFi setup, MQTT discovery/base association, grid layout, settings scoping, wilt-watch, drama-level, the six heuristic visual detectors, and this module's own top-level MQTT/HA presence are all built.** The flash subsystem (ring driver, trigger logic) was built first. Not yet built:
 
-- Capture scheduling (when a photo actually gets taken, and calling `flash_controller`/`wilt_watch`/`drama_level` as part of that) - `camera_capture.capture_still()` (the underlying "take one photo now" primitive) exists and is used by the grid setup page and wilt-watch's manual reference capture, but nothing calls it on a schedule yet
+- Capture scheduling (when a photo actually gets taken, and calling `flash_controller`/`wilt_watch`/`drama_level`/the six detectors as part of that) - `camera_capture.capture_still()` (the underlying "take one photo now" primitive) exists and is used by the grid setup page and wilt-watch's manual reference capture, but nothing calls it on a schedule yet, and no detector is wired into a live capture loop or a results-publishing/dashboard surface (`SHORT_DISCLAIMER` is defined and tested but has no display call site yet)
 - The light sensor driver `flash_controller.maybe_flash()` reads from (its reading is passed in, not sourced here yet)
 - A given base's own local portal showing/editing its own per-base settings (full three-way parity) - the base firmware has no mechanism to display MQTT data from a non-BLE-paired module; documented as a gap, not built (see `decisions-and-practices.md` and `docs/ARCHITECTURE.md`)
 - Ring mechanical mounting (see [`BUILD.md`](BUILD.md) for the glare/reflection constraint that governs where it can go)
 
 ## Tests
 
-Stub/mock tests, no real Pi hardware, `rpi_ws281x`, `nmcli`/NetworkManager, Pillow, or MQTT broker required - run any of them directly with `python3 tests/<name>.py` from this directory:
+Stub/mock tests, no real Pi hardware, `rpi_ws281x`, `nmcli`/NetworkManager, or MQTT broker required - run any of them directly with `python3 tests/<name>.py` from this directory. **Exception:** the six detector test files (and `test_detector_common.py`) require numpy + opencv-python-headless actually installed (`pip install opencv-python-headless numpy`) - unlike every other guarded dependency in this module (Pillow, `rpi_ws281x`, `nmcli`), these tests exercise the real OpenCV algorithm itself, not a stubbed-out decision layer around it, so there's no meaningful way to test them without the real library. See `detector_common.py`'s module docstring.
 
 | File | Covers |
 |---|---|
@@ -139,9 +170,19 @@ Stub/mock tests, no real Pi hardware, `rpi_ws281x`, `nmcli`/NetworkManager, Pill
 | [`tests/test_mqtt_discovery.py`](tests/test_mqtt_discovery.py) | Retained-message parsing, malformed input handling, connect/disconnect against a fake MQTT client |
 | [`tests/test_base_association.py`](tests/test_base_association.py) | Association persistence round trip |
 | [`tests/test_grid_config.py`](tests/test_grid_config.py) | Grid dimensions (incl. non-square), cell assignment/validation, `cell_pixel_bbox()` |
-| [`tests/test_per_base_settings.py`](tests/test_per_base_settings.py) | Per-base metric toggles, general_health non-toggleability, `wilt_watch_config_necessary` flag lifecycle |
+| [`tests/test_per_base_settings.py`](tests/test_per_base_settings.py) | Per-base metric toggles (all eight), general_health non-toggleability, `wilt_watch_config_necessary` flag lifecycle |
 | [`tests/test_image_compare.py`](tests/test_image_compare.py) | `GrayscaleImage` crop/round-trip, `structural_difference()` against synthetic silhouette data |
 | [`tests/test_wilt_watch.py`](tests/test_wilt_watch.py) | Reference-capture flow, `None` wilt level before a reference exists, per-base isolation |
 | [`tests/test_drama_level.py`](tests/test_drama_level.py) | Rolling previous-capture comparison, `None` on first capture, per-base isolation |
-| [`tests/test_mqtt_presence.py`](tests/test_mqtt_presence.py) | Global vs. per-base topic isolation, `set_config`/`set_metric` command handling incl. whitelist rejection, base sync/unsync |
-| [`tests/test_web_portal.py`](tests/test_web_portal.py) | HTTP routes end-to-end against a real loopback server (fake collaborators) - status codes, routing, HTML-escaping of user-controlled data, grid/settings/wilt-watch flows |
+| [`tests/test_mqtt_presence.py`](tests/test_mqtt_presence.py) | Global vs. per-base topic isolation, `set_config`/`set_metric` command handling incl. whitelist rejection, base sync/unsync, `detector_disclaimer` field on per-base state |
+| [`tests/test_web_portal.py`](tests/test_web_portal.py) | HTTP routes end-to-end against a real loopback server (fake collaborators) - status codes, routing, HTML-escaping of user-controlled data, grid/settings/wilt-watch flows, the six new per-base detector toggles, the full disclaimer on `/settings` |
+| [`tests/test_visual_disclaimers.py`](tests/test_visual_disclaimers.py) | `FULL_DISCLAIMER`/`SHORT_DISCLAIMER` content sanity checks (no cv2/numpy required) |
+| [`tests/test_detector_common.py`](tests/test_detector_common.py) | `compute_leaf_mask()`, `confidence_from_ratio()`, `color_outlier_mask()` |
+| [`tests/test_config_detectors.py`](tests/test_config_detectors.py) | `detectors` config deep-merge, incl. 3-level-deep `pest_indicators` sub-dicts (no cv2/numpy required) |
+| [`tests/test_chlorosis.py`](tests/test_chlorosis.py) | Adaptive yellow-vs-green-variance detection against synthetic images, including the "no green reference in frame" edge case |
+| [`tests/test_necrosis.py`](tests/test_necrosis.py) | Uniform (non-margin-weighted) dark-patch detection; documents the near-black-vs-shadow leaf-mask edge case |
+| [`tests/test_spotting.py`](tests/test_spotting.py) | Few-larger-lesion connected-component tuning; tiny noise filtered out |
+| [`tests/test_leaf_scorch.py`](tests/test_leaf_scorch.py) | The margin-weighting behavior that distinguishes it from necrosis - same discoloration, margin vs. interior placement |
+| [`tests/test_powdery_mildew.py`](tests/test_powdery_mildew.py) | Color-AND-texture-required behavior (color-only and texture-only each fail alone); documents the mildew-vs-near-white-background-exclusion edge case |
+| [`tests/test_pest_indicators.py`](tests/test_pest_indicators.py) | All three sub-checks (webbing/pest_clusters/stippling), confidence capping, spotting's opposite tuning, and the cross-file mildew-vs-stippling distinguishing behavior |
+| [`tests/synthetic_images.py`](tests/synthetic_images.py) | Not a test file itself - shared synthetic-BGR-image helpers the detector test files above import |

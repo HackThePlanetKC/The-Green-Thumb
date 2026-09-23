@@ -54,6 +54,7 @@ import re
 
 import version
 from config import set_by_path
+from visual_disclaimers import FULL_DISCLAIMER
 
 try:
     import paho.mqtt.client as mqtt
@@ -203,7 +204,15 @@ class CameraMqttPresence:
         base to send its own MQTT command.
         """
         if self._client is not None:
-            self._publish_json(self._base_topic(base_id, "state"), self._per_base_settings.get_settings(base_id), retain=True)
+            payload = self._per_base_settings.get_settings(base_id)
+            # The six heuristic visual detectors' toggles live in this
+            # same payload (per_base_settings.py's METRICS) - the full
+            # disclaimer is attached here too so it's visible wherever
+            # HA renders this base's settings (item 8's "HA settings
+            # view" requirement), without per_base_settings.py itself
+            # (a pure data model) needing to know about disclaimer text.
+            payload["detector_disclaimer"] = FULL_DISCLAIMER
+            self._publish_json(self._base_topic(base_id, "state"), payload, retain=True)
 
     def _publish(self, topic, payload, retain=False, qos=1):
         self._client.publish(topic, payload, retain=retain, qos=qos)

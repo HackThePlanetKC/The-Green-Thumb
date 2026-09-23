@@ -27,6 +27,7 @@
 
   <h2>Per-base metrics</h2>
   <p>Only shown for bases this module is associated with. General health is always on and can't be turned off. Each other metric is an independent opt-in.</p>
+  <p class="disclaimer"><strong>chlorosis, necrosis, spotting, leaf scorch, powdery mildew, and pest indicators</strong> are heuristic, rule-based visual detectors, not a diagnosis. {{detector_disclaimer}}</p>
   <div id="per-base"></div>
   <p id="per-base-status"></p>
 
@@ -55,7 +56,10 @@
       }
     });
 
-    const METRICS = ["chlorosis", "necrosis", "spotting", "wilt_watch", "drama_level"];
+    const METRICS = [
+      "chlorosis", "necrosis", "spotting", "leaf_scorch", "powdery_mildew", "pest_indicators",
+      "wilt_watch", "drama_level",
+    ];
     const perBase = {{per_base_json}};
 
     async function saveMetric(baseId, metric, enabled, promptEl) {

@@ -9,6 +9,35 @@ overlooked. Newest entries at the top.
 
 ---
 
+## 2026-09-23 — Heuristic visual detector thresholds: module-global, not per-base
+
+Six heuristic visual detectors (chlorosis, necrosis, spotting, leaf
+scorch, powdery mildew, pest indicators - see
+`modules/Camera Module/README.md`) were added with two kinds of
+settings: an opt-in per-base toggle (does this base run this
+detector at all) and a per-detector sensitivity/threshold (how
+aggressively it flags something). The task asked for thresholds
+"consistent with existing threshold config patterns in the project" -
+every existing threshold in this codebase (the base station's own
+sensor thresholds, this module's `flash.low_light_threshold`) is
+module/device-global, not per-base. No per-base threshold pattern
+exists anywhere to be consistent WITH.
+
+Decision: thresholds live in `config.py`'s `DEFAULT_CONFIG["detectors"]`
+- module-global, one shared set of thresholds for every base this
+module monitors - while each detector's enabled/disabled toggle stays
+per-base (`per_base_settings.py`), since which checks a base wants
+running is inherently a per-base choice in a way a CV tuning constant
+isn't (in v1, at least - nothing rules out per-base threshold overrides
+later if different plants/species turn out to need genuinely different
+tuning, but that's not assumed here without evidence).
+
+**Practice this reinforces:** when an instruction says "consistent with
+existing patterns" and the codebase only has one shape of that pattern,
+follow the existing shape rather than inventing a new one (e.g. a
+per-base threshold dict) to satisfy a different part of the same
+instruction. Document the interpretation instead of guessing silently.
+
 ## 2026-09-23 — Base-firmware local UI gap for non-BLE-paired modules: documented, deferred
 
 Captured while building grid/settings, wilt-watch, and drama-level for

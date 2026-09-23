@@ -383,6 +383,7 @@ try:
     status, body = get(port7, "/settings")
     check("GET /settings returns 200", status == 200)
     check("GET /settings embeds the associated base for per-base toggles", "Tomato Base" in body)
+    check("GET /settings shows the full detector disclaimer (item 8)", "NOT diagnostic-grade" in body and "qualified professional" in body)
 
     status, body = post(port7, "/save_global_settings", "frequency_per_day=4&flash_enabled=true&flash_threshold=75")
     check("POST /save_global_settings returns 200", status == 200)
@@ -418,6 +419,14 @@ try:
     check("capturing a wilt-watch reference once a cell is assigned succeeds", json.loads(body)["success"] is True)
     check("a captured wilt-watch reference clears config_necessary", per_base7.get_settings("A1B2C3")["wilt_watch_config_necessary"] is False)
     check("a captured wilt-watch reference is stored and usable for comparison", wilt7.has_reference("A1B2C3") is True)
+
+    # the three new heuristic visual detector toggles (leaf_scorch, powdery_mildew, pest_indicators)
+    # go through the exact same route as the pre-existing ones - no special-casing needed
+    for new_metric in ("leaf_scorch", "powdery_mildew", "pest_indicators"):
+        status, body = post(port7, "/save_per_base_metric", "base_id=A1B2C3&metric={}&enabled=true".format(new_metric))
+        result = json.loads(body)
+        check("POST /save_per_base_metric accepts the new '{}' toggle".format(new_metric), status == 200 and result["success"] is True)
+        check("'{}' is persisted".format(new_metric), per_base7.get_settings("A1B2C3")[new_metric] is True)
 finally:
     server7.shutdown()
 

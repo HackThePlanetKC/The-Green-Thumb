@@ -15,18 +15,29 @@ persisting a setting that can never be anything but True. get_settings()
 still reports it (as a constant) so callers rendering a settings page
 don't need a special case for "the one metric with no checkbox".
 
-Each of the other five metrics is an independent opt-in: enabling one
-never implies or enables another (e.g. turning on wilt_watch does not
-turn on drama_level, even though both are capture-comparison metrics
-- see wilt_watch.py / drama_level.py).
+Each of the other metrics is an independent opt-in: enabling one never
+implies or enables another (e.g. turning on wilt_watch does not turn
+on drama_level, even though both are capture-comparison metrics - see
+wilt_watch.py / drama_level.py). chlorosis/necrosis/spotting/
+leaf_scorch/powdery_mildew/pest_indicators are the six heuristic
+single-frame visual detectors (see each file of the same name, and
+detector_common.py) - independent of wilt_watch/drama_level, which
+compare against a reference or previous capture instead of analyzing
+one frame in isolation.
 """
 
-METRICS = ("chlorosis", "necrosis", "spotting", "wilt_watch", "drama_level")
+METRICS = (
+    "chlorosis", "necrosis", "spotting", "leaf_scorch", "powdery_mildew", "pest_indicators",
+    "wilt_watch", "drama_level",
+)
 
 _DEFAULT_ENTRY = {
     "chlorosis": False,
     "necrosis": False,
     "spotting": False,
+    "leaf_scorch": False,
+    "powdery_mildew": False,
+    "pest_indicators": False,
     "wilt_watch": False,
     "drama_level": False,
     # Set True the moment wilt_watch is switched on for a base that

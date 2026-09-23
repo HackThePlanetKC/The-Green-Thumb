@@ -24,6 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config as config_module  # noqa: E402
 from mqtt_presence import CameraMqttPresence  # noqa: E402
 from per_base_settings import PerBaseSettingsManager  # noqa: E402
+from visual_disclaimers import FULL_DISCLAIMER  # noqa: E402
 
 failures = []
 
@@ -128,6 +129,7 @@ with tempfile.TemporaryDirectory() as d:
     check("associated base's status published online, retained", fake_client.published_to("greenthumb/A1B2C3/module/CAM001/status") == [("greenthumb/A1B2C3/module/CAM001/status", b"online", True, 1)])
     base_state_payload = json.loads(fake_client.published_to("greenthumb/A1B2C3/module/CAM001/state")[0][1])
     check("associated base's state carries general_health always-on", base_state_payload["general_health"] is True)
+    check("associated base's state carries the full detector disclaimer (item 8, HA settings view)", base_state_payload["detector_disclaimer"] == FULL_DISCLAIMER)
 
     # --- item 14/16: global and per-base topic trees never overlap ---
     check("no per-base data is published under the global/ prefix", not any("A1B2C3" in t for t in global_topics))

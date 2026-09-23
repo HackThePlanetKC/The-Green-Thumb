@@ -102,9 +102,74 @@ DEFAULT_CONFIG = {
     # per_base_settings.py. Each entry, once a base has any setting
     # touched, has the shape:
     #   {"chlorosis": bool, "necrosis": bool, "spotting": bool,
-    #    "wilt_watch": bool, "drama_level": bool,
-    #    "wilt_watch_config_necessary": bool}
+    #    "leaf_scorch": bool, "powdery_mildew": bool,
+    #    "pest_indicators": bool, "wilt_watch": bool,
+    #    "drama_level": bool, "wilt_watch_config_necessary": bool}
     "per_base_settings": {},
+    # Thresholds/sensitivity for the six heuristic visual detectors
+    # (chlorosis.py, necrosis.py, spotting.py, leaf_scorch.py,
+    # powdery_mildew.py, pest_indicators.py). Module-global, not
+    # per-base, even though each detector's ENABLED toggle is per-base
+    # (per_base_settings.py) - a deliberate interpretation where the
+    # task's own instruction ("consistent with existing threshold
+    # config patterns in the project") pointed one way, since every
+    # existing threshold in this project (flash.low_light_threshold,
+    # the base station's own sensor thresholds) is module/device-
+    # global, not per-base. See decisions-and-practices.md. Sane
+    # starting defaults, not sourced from a dataset - same "adjustable,
+    # not fixed, tune once pointed at real plants" spirit as this
+    # module's other thresholds.
+    "detectors": {
+        "chlorosis": {
+            "green_hue_min": 35,        # OpenCV hue 0-179; healthy-green reference band
+            "green_hue_max": 85,
+            "std_dev_multiplier": 1.5,  # how far below the reference green's mean hue counts as "shifted"
+            "yellow_hue_floor": 15,     # excludes red/brown/orange - keeps this detector out of necrosis/scorch territory
+            "saturation_min": 60,       # excludes washed-out/desaturated pixels
+            "affected_threshold_pct": 5.0,
+        },
+        "necrosis": {
+            "saturation_max": 60,
+            "value_max": 90,
+            "affected_threshold_pct": 3.0,
+        },
+        "spotting": {
+            "color_distance_threshold": 40,  # LAB Euclidean distance from the leaf's own mean color
+            "min_lesion_area_px": 30,        # deliberately larger than pest_clusters/stippling's minimums - "few larger lesions"
+            "min_lesion_count": 1,
+            "affected_threshold_pct": 2.0,
+        },
+        "leaf_scorch": {
+            "saturation_max": 60,
+            "value_max": 100,
+            "margin_band_fraction": 0.15,  # outer 15% (by distance-from-edge, not area) of the leaf
+            "affected_threshold_pct": 10.0,
+        },
+        "powdery_mildew": {
+            "saturation_max": 40,
+            "value_min": 180,
+            "texture_variance_min": 15.0,  # per-pixel Laplacian magnitude
+            "affected_threshold_pct": 5.0,
+        },
+        "pest_indicators": {
+            "webbing": {
+                "canny_low": 50,
+                "canny_high": 150,
+                "edge_density_min": 0.03,
+            },
+            "pest_clusters": {
+                "color_distance_threshold": 40,
+                "max_component_area_px": 25,  # deliberately smaller than spotting.py's minimum - "many small objects"
+                "min_component_count": 8,
+            },
+            "stippling": {
+                "saturation_max": 50,
+                "value_min": 170,
+                "max_component_area_px": 10,
+                "min_component_count": 15,
+            },
+        },
+    },
 }
 
 

@@ -42,6 +42,7 @@ See [`README.md`](README.md#hardware--bom) for the parts list.
 
 - **Raspberry Pi OS**, with I2C/SPI as needed by whatever camera/light-sensor stack ends up used (not finalized yet - see `README.md`'s Status section).
 - **`rpi_ws281x`** (`pip install rpi_ws281x`) - see [`README.md`](README.md#driver-choice) for why this over the CircuitPython wrapper. Note this library needs root (or the `gpio`/appropriate group + capability setup) to drive PWM/DMA directly - run as root or configure permissions accordingly.
+- **`opencv-python-headless` + `numpy`** (`pip install opencv-python-headless numpy`) - required by the six heuristic visual detectors (`chlorosis.py`, `necrosis.py`, `spotting.py`, `leaf_scorch.py`, `powdery_mildew.py`, `pest_indicators.py`, and `detector_common.py`) - see [`README.md`](README.md#heuristic-visual-detectors). The headless build (no GUI/imshow support) is the right fit here - this module never displays an image window, only analyzes pixel data.
 
 ## Verifying the flash subsystem
 
