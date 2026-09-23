@@ -59,7 +59,15 @@ Units: imperial (°F, foot-candles).
 /web/
   server.py                   # done (WiFi setup + dashboard + settings + calibration + pairing - full web/ surface complete)
   static/                     # setup.html, result.html, dashboard.html, settings.html, calibration.html, pairing.html, style.css
+/modules/
+  Camera Module/              # in progress - visual health monitor, see below
 ```
+
+## `modules/` — peripheral/module development
+
+`modules/` is the home for all module-specific code going forward (camera module now; pump, grow light, NPK sensor, and any future modules later) - kept entirely separate from the base station's own `core/`/`drivers/`/`web/` layout above. That separation matters because modules on this platform are not guaranteed to be MicroPython/ESP32 at all: a module can be BLE-paired firmware running on the same class of microcontroller as the base (matching the `module/<mod_id>/*` MQTT relay contract documented below), or it can be an entirely standalone device on different hardware/OS with its own MQTT identity - the Camera Module (see next section) is the first example of the latter, running on a Pi rather than an ESP32. Each subdirectory under `modules/` is a self-contained codebase: its own config, its own version (if it has one), its own build doc - nothing under `modules/` is compiled, flashed, or deployed as part of the base station's own build (`tools/build_mpy.sh` does not touch it).
+
+**Camera Module** (`modules/Camera Module/`) - a standalone Pi-based visual health monitor: periodic photos of the plant, with a WS2812B RGBW ring (7 pixels) for low-light fill flash, driven directly off GPIO18 (Pi hardware PWM0) via `rpi_ws281x`. Only the flash subsystem is built so far (ring driver, trigger logic, config) - capture scheduling, its light sensor driver, and MQTT discovery aren't written yet. Full detail: [`modules/Camera Module/README.md`](../modules/Camera%20Module/README.md) and [`BUILD.md`](../modules/Camera%20Module/BUILD.md). Not a BLE-paired peripheral of a base station (unlike the provisional module development contract further down this doc, which describes modules connecting *through* a base) - this module speaks MQTT directly and independently, subscribing to whichever base(s) it's monitoring rather than relaying through one. That independent MQTT presence is the reason `device_info`'s `friendly_name` field exists (see below): a module like this one needs a human-readable label for the base it's attached to (e.g. for its own MQTT discovery payload), and reading a base's retained `device_info.friendly_name` gives it one without duplicating the base's `device_name` lookup logic itself.
 
 ## Key design decisions
 
