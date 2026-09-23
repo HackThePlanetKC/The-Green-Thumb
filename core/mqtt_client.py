@@ -200,9 +200,9 @@ class GreenThumbMqtt:
 
     def publish_device_info(self, device_name):
         """
-        Retained "who am I" topic (version, device_name, base_id) -
-        kept separate from publish_config()'s mutable settings dump,
-        since this reflects fixed-per-boot facts about the running
+        Retained "who am I" topic (version, device_name, friendly_name,
+        base_id) - kept separate from publish_config()'s mutable settings
+        dump, since this reflects fixed-per-boot facts about the running
         firmware/device identity, not something the user edits via
         set_config. Published once at connect, same point config
         already is.
@@ -213,10 +213,24 @@ class GreenThumbMqtt:
         (only BLE modules had one, via the Firmware Version GATT
         characteristic - see ble_central.py). See version.py and
         docs/ARCHITECTURE.md.
+
+        friendly_name is additive (0.3.0) - same value as device_name,
+        for MQTT clients that want a human-readable label without also
+        having to know device_name is the field to read (e.g. a future
+        camera module doing MQTT discovery, which needs something to
+        show instead of the raw MAC-derived base_id). Falls back to
+        config.DEFAULT_CONFIG's own device_name default ("Green Thumb")
+        rather than base_id if device_name is empty/unset - falling back
+        to base_id would defeat the point of the field (never showing
+        the raw identifier), and reusing DEFAULT_CONFIG's literal here
+        instead of a second hardcoded copy keeps the two from drifting
+        apart if that default ever changes. device_name itself is
+        unchanged - this only adds a field, never alters an existing one.
         """
         self._publish_json("device_info", {
             "version": version.VERSION,
             "device_name": device_name,
+            "friendly_name": device_name or config_module.DEFAULT_CONFIG["device_name"],
             "base_id": self._base_id,
         }, retain=True)
 

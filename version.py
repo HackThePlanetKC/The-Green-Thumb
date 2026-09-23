@@ -24,9 +24,16 @@ color schemes, a display-only C/F toggle. All backward-compatible
 in a way that would break an existing client) - a MINOR bump, not
 MAJOR, per the rule above.
 
+0.3.0: added friendly_name to the retained device_info MQTT topic -
+same device_name value under a second key, for MQTT clients (e.g. a
+future camera module's MQTT discovery) that want a human-readable
+label without needing to know device_name specifically is the field to
+read. Additive only - device_name/version/base_id are unchanged - so a
+MINOR bump, not MAJOR.
+
 Published to HA/MQTT via mqtt_client.py's publish_device_info() as the
 device registry's sw_version - see docs/ARCHITECTURE.md. Also used as
 the version suffix in the project's distributed zip filename.
 """
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
