@@ -37,6 +37,11 @@ DEFAULT_CONFIG = {
         # the base station's status_led.brightness (different LED
         # hardware entirely), see ring.py.
         "brightness": 0.5,
+        # Module-global on/off for the whole flash subsystem (added
+        # alongside grid/settings work) - lets a user disable the ring
+        # entirely (e.g. if it's causing glare, see BUILD.md) without
+        # losing the tuned threshold/brightness values underneath.
+        "enabled": True,
     },
     "wifi": {
         # Same shape as the base station's own core/config.py wifi
@@ -66,6 +71,40 @@ DEFAULT_CONFIG = {
     # base_association.py for why) this camera module is associated
     # with. Empty until the user completes the association step.
     "associated_base_ids": [],
+    "capture": {
+        # How often a scheduled capture runs, per day. Capture
+        # scheduling itself isn't built yet (see README.md
+        # "Remaining") - this is the setting a future scheduler will
+        # read, exposed now so it has one home in config/MQTT/HA from
+        # the start rather than being bolted on later.
+        "frequency_per_day": 2,
+    },
+    # Grid layout: how the camera's frame is divided into regions, and
+    # which associated base each region belongs to. Module-global (see
+    # grid_config.py) - editable only via the camera portal or HA, not
+    # any individual base's portal (see docs/ARCHITECTURE.md).
+    "grid": {
+        "rows": 1,
+        "cols": 1,
+        # "row,col" (0-indexed) -> base_id. A cell absent from this
+        # dict is unassigned. Deliberately a flat dict keyed by a
+        # string cell coordinate, not a 2D list - JSON object keys
+        # must be strings anyway, and a flat dict means an unassigned
+        # cell simply has no entry rather than needing an explicit
+        # null placeholder in a full rows*cols grid.
+        "cells": {},
+    },
+    # Per-base opt-in metric settings, keyed by base_id (a flat dict
+    # under this one key, not separate top-level keys per base - keeps
+    # _deep_merge_defaults simple, and there's no fixed set of base_ids
+    # to enumerate in DEFAULT_CONFIG ahead of time). general_health is
+    # NOT stored here - it's always on and not user-toggleable, see
+    # per_base_settings.py. Each entry, once a base has any setting
+    # touched, has the shape:
+    #   {"chlorosis": bool, "necrosis": bool, "spotting": bool,
+    #    "wilt_watch": bool, "drama_level": bool,
+    #    "wilt_watch_config_necessary": bool}
+    "per_base_settings": {},
 }
 
 
@@ -106,6 +145,32 @@ def save(config, path=CONFIG_PATH):
     with open(tmp_path, "w") as f:
         json.dump(config, f)
     os.replace(tmp_path, path)
+
+
+def set_by_path(config, path, value):
+    """
+    Writes a nested config value using dot notation - same semantics as
+    the base station's own core/config.py set_by_path(): raises
+    KeyError if the path (including the final key) doesn't already
+    exist, so a malformed MQTT command can't inject arbitrary config
+    structure. Does not save to disk - caller calls save() after.
+
+    Used by mqtt_presence.py's global set_config command handler,
+    which additionally restricts which top-level keys it will forward
+    here at all (see that file) - this function itself has no
+    awareness of "global vs per-base vs credentials", it just writes
+    to an existing path.
+    """
+    keys = path.split(".")
+    node = config
+    for key in keys[:-1]:
+        if not isinstance(node, dict) or key not in node:
+            raise KeyError(path)
+        node = node[key]
+    last_key = keys[-1]
+    if not isinstance(node, dict) or last_key not in node:
+        raise KeyError(path)
+    node[last_key] = value
 
 
 def _copy(d):

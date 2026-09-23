@@ -9,6 +9,45 @@ overlooked. Newest entries at the top.
 
 ---
 
+## 2026-09-23 — Base-firmware local UI gap for non-BLE-paired modules: documented, deferred
+
+Captured while building grid/settings, wilt-watch, and drama-level for
+the Camera Module (see `docs/ARCHITECTURE.md`'s Camera Module section
+and its matching Future Enhancements entry) - per-base settings
+(general health/advanced metric toggles) needed three-way editability
+(camera portal, that base's own portal, HA), but the base's own local
+portal has no way to subscribe to or render MQTT data from a module
+it isn't BLE-paired with. Modifying the base firmware to add that
+(`core/`, `web/server.py`) was judged out of scope for a camera-module
+task - different codebase, its own version bump and testing, not
+authorized under that task's scope. Documented instead of built, by
+request.
+
+Gap: Base-firmware local UI cannot display settings for non-BLE-paired modules
+
+- The base firmware's local web portal (`web/server.py` / `core/`)
+  currently has no mechanism to subscribe to or render MQTT data from
+  a module it isn't BLE-paired with (e.g. the Camera Module, which is
+  a standalone WiFi/MQTT module, not a BLE peripheral).
+- As of the current camera module work, per-base camera settings
+  (general health/advanced metric toggles, etc.) are editable via HA
+  and the camera module's own portal - full MQTT-layer parity exists
+  - but are NOT visible/editable on that base's own local portal. This
+  was an explicit scope decision on the camera module task (modifying
+  base firmware was out of scope - different codebase, would require
+  its own version bump and testing, not authorized under that task).
+- Closing this gap means: base firmware gains an MQTT subscription
+  client-side for relevant module topics it isn't BLE-paired with,
+  plus a new local-portal UI section to render/edit that data. This is
+  base-firmware work (`core/`, `web/server.py`), with its own version
+  bump and testing - separate from any module's `version.py`.
+- This isn't camera-module-specific - any future standalone WiFi/MQTT
+  module (not just the camera) would hit the same gap. Worth solving
+  generally (a base subscribes to and displays settings for any
+  associated module, regardless of pairing method) rather than one-off
+  per module.
+- Status: deferred, not scheduled. Do not implement.
+
 ## 2026-09-23 — Species-based threshold suggestions: documented, deferred
 
 Captured as a future-enhancement idea in `docs/ARCHITECTURE.md`'s new

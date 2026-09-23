@@ -22,6 +22,20 @@ monitors) - both additive, no existing contract changed, so a MINOR
 bump. Capture scheduling, grid/settings UI, and the module's own
 top-level MQTT/HA presence still don't exist yet - see this module's
 README.md for current status.
+
+0.3.0: added grid/region layout (grid_config.py), module-global vs.
+per-base settings scoping (per_base_settings.py), the wilt-watch and
+drama-level structural comparison metrics (image_compare.py,
+wilt_watch.py, drama_level.py), the underlying one-shot capture
+primitive they both need (camera_capture.py), and this module's own
+top-level MQTT/HA presence for global + per-base settings
+(mqtt_presence.py, greenthumb/camera/<camera_id>/global/... and
+greenthumb/<base_id>/module/<camera_id>/...). All additive - no
+existing topic contract changed, so another MINOR bump. Capture
+scheduling and the light sensor driver still don't exist; a base's own
+local portal editing its own per-base settings is a documented,
+deferred gap (see decisions-and-practices.md) - see this module's
+README.md for current status.
 """
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"

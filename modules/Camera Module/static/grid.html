@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Green Thumb Camera Module — Grid Layout</title>
+  <style>
+    #grid-overlay { position: relative; display: inline-block; max-width: 100%; }
+    #grid-overlay img { display: block; max-width: 100%; }
+    #cell-grid { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: grid; }
+    #cell-grid select { width: 100%; height: 100%; opacity: 0.85; border: 1px solid #fff; }
+  </style>
+</head>
+<body>
+  <h1>Grid Layout</h1>
+  <p>Divide the camera's frame into regions (up to 4x4, rows and columns independent - non-square layouts like 2x4 are fine) and assign each region to one of this module's associated bases. A base may be assigned more than one region.</p>
+
+  <form id="dims-form">
+    <label>Rows <input type="number" id="rows" name="rows" min="1" max="4" value="{{rows}}"></label>
+    <label>Columns <input type="number" id="cols" name="cols" min="1" max="4" value="{{cols}}"></label>
+    <button type="submit">Update Grid Size</button>
+  </form>
+
+  <p>
+    <button id="capture-btn" type="button">Capture Reference Photo</button>
+  </p>
+
+  <div id="grid-overlay">
+    <img id="reference-img" src="/api/grid/reference.jpg" alt="Reference capture">
+    <div id="cell-grid"></div>
+  </div>
+  <p id="no-reference">No reference photo yet - capture one above to lay out the grid against it.</p>
+
+  <p><button id="save-btn" type="button">Save Grid</button></p>
+  <p id="status"></p>
+
+  <script>
+    let rows = {{rows}};
+    let cols = {{cols}};
+    const cells = {{cells_json}};
+    const bases = {{bases_json}};
+    const hasReference = {{has_reference}};
+
+    function renderCellGrid() {
+      const container = document.getElementById("cell-grid");
+      container.style.gridTemplateRows = "repeat(" + rows + ", 1fr)";
+      container.style.gridTemplateColumns = "repeat(" + cols + ", 1fr)";
+      container.innerHTML = "";
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          const key = r + "," + c;
+          const select = document.createElement("select");
+          select.dataset.row = r;
+          select.dataset.col = c;
+          const emptyOpt = document.createElement("option");
+          emptyOpt.value = "";
+          emptyOpt.textContent = "(unassigned)";
+          select.appendChild(emptyOpt);
+          Object.keys(bases).forEach((baseId) => {
+            const opt = document.createElement("option");
+            opt.value = baseId;
+            opt.textContent = bases[baseId];
+            if (cells[key] === baseId) opt.selected = true;
+            select.appendChild(opt);
+          });
+          container.appendChild(select);
+        }
+      }
+    }
+
+    document.getElementById("dims-form").addEventListener("submit", (e) => {
+      e.preventDefault();
+      rows = parseInt(document.getElementById("rows").value, 10);
+      cols = parseInt(document.getElementById("cols").value, 10);
+      renderCellGrid();
+    });
+
+    document.getElementById("capture-btn").addEventListener("click", async () => {
+      const statusEl = document.getElementById("status");
+      statusEl.textContent = "Capturing...";
+      try {
+        const resp = await fetch("/api/grid/capture_reference", { method: "POST" });
+        const result = await resp.json();
+        if (result.success) {
+          document.getElementById("reference-img").src = "/api/grid/reference.jpg?" + Date.now();
+          document.getElementById("reference-img").style.display = "block";
+          document.getElementById("no-reference").style.display = "none";
+          statusEl.textContent = "Captured.";
+        } else {
+          statusEl.textContent = "Error: " + (result.error || "capture failed");
+        }
+      } catch (e) {
+        statusEl.textContent = "Request failed - is the module reachable?";
+      }
+    });
+
+    document.getElementById("save-btn").addEventListener("click", async () => {
+      const cellMap = {};
+      document.querySelectorAll("#cell-grid select").forEach((select) => {
+        const key = select.dataset.row + "," + select.dataset.col;
+        if (select.value) cellMap[key] = select.value;
+      });
+      const params = new URLSearchParams();
+      params.append("rows", rows);
+      params.append("cols", cols);
+      params.append("cells", JSON.stringify(cellMap));
+
+      const statusEl = document.getElementById("status");
+      try {
+        const resp = await fetch("/save_grid", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: params.toString(),
+        });
+        const result = await resp.json();
+        statusEl.textContent = result.success ? "Saved." : "Error: " + (result.error || "unknown error");
+      } catch (e) {
+        statusEl.textContent = "Request failed - is the module reachable?";
+      }
+    });
+
+    document.getElementById("reference-img").style.display = hasReference ? "block" : "none";
+    document.getElementById("no-reference").style.display = hasReference ? "none" : "block";
+
+    renderCellGrid();
+  </script>
+</body>
+</html>

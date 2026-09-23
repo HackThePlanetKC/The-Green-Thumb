@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Green Thumb Camera Module — Settings</title>
+</head>
+<body>
+  <h1>Settings</h1>
+
+  <h2>Module-global</h2>
+  <p>Applies to this whole camera module. Also editable from Home Assistant, and shown read-only on each base's own portal (see project docs).</p>
+  <form id="global-form">
+    <label>Capture frequency (per day)
+      <input type="number" id="frequency_per_day" name="frequency_per_day" min="1" value="{{frequency_per_day}}">
+    </label>
+    <label>
+      <input type="checkbox" id="flash_enabled" name="flash_enabled">
+      Flash ring enabled
+    </label>
+    <label>Low-light flash threshold
+      <input type="number" id="flash_threshold" name="flash_threshold" value="{{flash_threshold}}">
+    </label>
+    <button type="submit">Save Global Settings</button>
+  </form>
+  <p id="global-status"></p>
+
+  <h2>Per-base metrics</h2>
+  <p>Only shown for bases this module is associated with. General health is always on and can't be turned off. Each other metric is an independent opt-in.</p>
+  <div id="per-base"></div>
+  <p id="per-base-status"></p>
+
+  <script>
+    const flashEnabled = {{flash_enabled}};
+    document.getElementById("flash_enabled").checked = flashEnabled;
+
+    document.getElementById("global-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const params = new URLSearchParams();
+      params.append("frequency_per_day", document.getElementById("frequency_per_day").value);
+      params.append("flash_enabled", document.getElementById("flash_enabled").checked ? "true" : "false");
+      params.append("flash_threshold", document.getElementById("flash_threshold").value);
+
+      const statusEl = document.getElementById("global-status");
+      try {
+        const resp = await fetch("/save_global_settings", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: params.toString(),
+        });
+        const result = await resp.json();
+        statusEl.textContent = result.success ? "Saved." : "Error: " + (result.error || "unknown error");
+      } catch (e) {
+        statusEl.textContent = "Request failed - is the module reachable?";
+      }
+    });
+
+    const METRICS = ["chlorosis", "necrosis", "spotting", "wilt_watch", "drama_level"];
+    const perBase = {{per_base_json}};
+
+    async function saveMetric(baseId, metric, enabled, promptEl) {
+      const params = new URLSearchParams();
+      params.append("base_id", baseId);
+      params.append("metric", metric);
+      params.append("enabled", enabled ? "true" : "false");
+
+      const statusEl = document.getElementById("per-base-status");
+      try {
+        const resp = await fetch("/save_per_base_metric", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: params.toString(),
+        });
+        const result = await resp.json();
+        if (result.success) {
+          statusEl.textContent = "Saved.";
+          if (metric === "wilt_watch" && promptEl) {
+            promptEl.style.display = result.settings.wilt_watch_config_necessary ? "block" : "none";
+          }
+        } else {
+          statusEl.textContent = "Error: " + (result.error || "unknown error");
+        }
+      } catch (e) {
+        statusEl.textContent = "Request failed - is the module reachable?";
+      }
+    }
+
+    async function captureWiltReference(baseId, promptEl) {
+      const statusEl = document.getElementById("per-base-status");
+      statusEl.textContent = "Capturing reference image for " + baseId + "...";
+      try {
+        const params = new URLSearchParams();
+        params.append("base_id", baseId);
+        const resp = await fetch("/api/wilt_watch/capture_reference", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: params.toString(),
+        });
+        const result = await resp.json();
+        if (result.success) {
+          statusEl.textContent = "Reference image captured for " + baseId + ".";
+          promptEl.style.display = "none";
+        } else {
+          statusEl.textContent = "Error: " + (result.error || "capture failed");
+        }
+      } catch (e) {
+        statusEl.textContent = "Request failed - is the module reachable?";
+      }
+    }
+
+    const container = document.getElementById("per-base");
+    if (perBase.length === 0) {
+      container.innerHTML = "<p>No bases associated yet.</p>";
+    }
+    perBase.forEach((entry) => {
+      const wrap = document.createElement("div");
+      const title = document.createElement("h3");
+      title.textContent = entry.friendly_name;
+      wrap.appendChild(title);
+
+      const generalLabel = document.createElement("label");
+      generalLabel.innerHTML = '<input type="checkbox" checked disabled> General health (always on)';
+      wrap.appendChild(generalLabel);
+      wrap.appendChild(document.createElement("br"));
+
+      const promptEl = document.createElement("p");
+      promptEl.textContent = "Wilt-watch enabled but no reference image yet - capture one now:";
+      const captureBtn = document.createElement("button");
+      captureBtn.type = "button";
+      captureBtn.textContent = "Capture wilt-watch reference";
+      captureBtn.addEventListener("click", () => captureWiltReference(entry.base_id, promptEl));
+      promptEl.appendChild(document.createElement("br"));
+      promptEl.appendChild(captureBtn);
+      promptEl.style.display = entry.settings.wilt_watch && entry.settings.wilt_watch_config_necessary ? "block" : "none";
+
+      METRICS.forEach((metric) => {
+        const label = document.createElement("label");
+        const input = document.createElement("input");
+        input.type = "checkbox";
+        input.checked = !!entry.settings[metric];
+        input.addEventListener("change", () => saveMetric(entry.base_id, metric, input.checked, promptEl));
+        label.appendChild(input);
+        label.appendChild(document.createTextNode(" " + metric.replace("_", " ")));
+        wrap.appendChild(label);
+        wrap.appendChild(document.createElement("br"));
+      });
+
+      wrap.appendChild(promptEl);
+      container.appendChild(wrap);
+    });
+  </script>
+</body>
+</html>
