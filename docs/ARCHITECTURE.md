@@ -406,3 +406,19 @@ Five real bugs, caught by a review of this repo rather than by the testing done 
 - Light sensor (LDR) calibration is unset by default (`light_calibration.calibrated: False`) until a real device is calibrated via `/calibration` - no ADC-to-foot-candle formula exists for a generic photoresistor without one, and a lux reference (light meter or phone app) is required for that flow's `bright_fc` step.
 - GPIO pin map (`pins.py`) is confirmed against a photo, not yet verified by actually wiring and powering a physical board - see the main.py/pins.py section below.
 - Physical build not yet verified on real hardware at all - every test so far (including `main.py`'s smoke test) runs against mocked hardware in a development sandbox.
+
+## Future Enhancements
+
+Documented ideas that are **deferred, not scheduled** - captured here so the reasoning and open questions aren't lost, not as a commitment to build them. See `decisions-and-practices.md` for the log entry on why this one specifically was documented instead of implemented.
+
+### Species-based sensor threshold suggestions
+
+**Status: deferred, not scheduled. Do not implement from this note alone.**
+
+The idea: let a user optionally identify what a given base is monitoring, and use that to suggest sensor thresholds instead of leaving every base on generic-houseplant defaults.
+
+- Add an optional `species` field, scoped **per base** (or per base's assigned camera-grid region, if the multi-base/camera-grid concept referenced elsewhere ends up shaped that way) - separate from and unrelated to the existing `device_name`/`friendly_name` fields, which stay purely display-only labels and would not be repurposed for this.
+- If `species` is set, look up known ideal-condition data for that species (soil moisture %, light hours/day, etc.) from an external source and present it as **suggested** threshold values for that base's existing sensors (moisture, light, and so on). **Never auto-applied** - a suggestion only becomes a real threshold change after the user explicitly accepts/confirms it, same "nothing silently changes a real setting" posture as everywhere else config gets written in this project.
+- **Data source not chosen.** Candidates surfaced so far - Perenual API, Trefle, Wikipedia infobox parsing - all have gaps or inconsistent units between species entries. This needs real research and evaluation before any is picked, not a default-to-whichever-is-easiest choice.
+- **Open design question, deliberately left open:** does the Camera Module (it has spare compute and its own WiFi/MQTT presence - see `modules/Camera Module/`) perform the species lookup and relay results through the base's existing MQTT topic namespace, or does each base perform its own lookup independently? Answering this now would be guessing ahead of the actual implementation constraints (network access from the base vs. the module, request rate/caching, offline behavior) - left for whoever picks this up.
+- **Explicitly unrelated to, and must never be merged with, the Camera Module's general-health classifier** (not yet built - see `modules/Camera Module/README.md`'s Status section for what exists so far). That classifier is intended to stay species-agnostic by design - a single generalized health score, with no species identification anywhere in the image-scoring pipeline. Recording that constraint here, ahead of the classifier itself existing, specifically so it isn't reconsidered/blurred later once this threshold-suggestion feature and the classifier are both being worked on. This feature only ever affects *suggested threshold values for other sensors* (moisture, light, etc.); it has no bearing on, and should never be wired into, how a photo gets scored.
