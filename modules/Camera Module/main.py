@@ -27,6 +27,7 @@ import wifi_manager as wifi_manager_module
 from base_association import BaseAssociationManager
 from drama_level import DramaLevelManager
 from grid_config import GridConfigManager
+from image_library import ImageLibrary
 from mqtt_discovery import BaseDiscovery
 from mqtt_presence import CameraMqttPresence
 from per_base_settings import PerBaseSettingsManager
@@ -47,6 +48,7 @@ def main():
     per_base_settings = PerBaseSettingsManager(config_module)
     wilt_watch = WiltWatchManager(per_base_settings)
     drama_level = DramaLevelManager()  # not yet called anywhere - see module docstring; kept ready for capture scheduling to use
+    image_library = ImageLibrary()
     presence = CameraMqttPresence(
         config_module, association, per_base_settings, grid_config, camera_id,
         broker=cfg["mqtt"]["broker"] or None, port=cfg["mqtt"]["port"], wilt_watch=wilt_watch,
@@ -70,7 +72,7 @@ def main():
     else:
         print("Camera Module ready at http://{}/".format(wifi_mgr.ip_address() or "<pending>"))
 
-    serve_forever(wifi_mgr, discovery, association, config_module, grid_config, per_base_settings, wilt_watch, presence)
+    serve_forever(wifi_mgr, discovery, association, config_module, grid_config, per_base_settings, wilt_watch, presence, image_library)
 
 
 if __name__ == "__main__":

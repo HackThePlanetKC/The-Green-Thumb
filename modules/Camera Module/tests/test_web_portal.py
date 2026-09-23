@@ -30,14 +30,30 @@ from http.server import ThreadingHTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from PIL import Image  # noqa: E402
+
 import config as config_module  # noqa: E402
 from grid_config import GridConfigManager  # noqa: E402
 from image_compare import GrayscaleImage  # noqa: E402
+from image_library import ImageLibrary  # noqa: E402
 from per_base_settings import PerBaseSettingsManager  # noqa: E402
 from web_portal import make_handler  # noqa: E402
 from wilt_watch import WiltWatchManager  # noqa: E402
 
 _TEMP_DIR = tempfile.mkdtemp()
+
+
+def _default_crop_and_save(source_path, bbox, dest_path):
+    """
+    Fake crop_and_save() for tests: writes a real, small, valid JPEG
+    (not a byte-for-byte crop of source_path/bbox - the fake
+    capture_still() these tests use doesn't write a real photo to crop
+    in the first place) so downstream real code (image_library.py's
+    thumbnail_bytes(), which opens the file with Pillow) still works
+    against genuine image bytes rather than needing its own special
+    case.
+    """
+    Image.new("RGB", (20, 20), (10, 200, 10)).save(dest_path, "JPEG")
 
 
 class _ConfigModuleAtTempPath:
@@ -140,6 +156,7 @@ class FakePresence:
         self.sync_calls = []
         self.publish_global_config_calls = 0
         self.publish_base_state_calls = []
+        self.publish_thumbnail_calls = []
 
     def set_broker(self, broker, port):
         self.set_broker_calls.append((broker, port))
@@ -156,11 +173,14 @@ class FakePresence:
     def publish_base_state(self, base_id):
         self.publish_base_state_calls.append(base_id)
 
+    def publish_thumbnail(self, base_id, jpeg_bytes):
+        self.publish_thumbnail_calls.append((base_id, jpeg_bytes))
+
 
 def start_server(
     wifi_manager, discovery, association, tag,
     grid_config=None, per_base_settings=None, wilt_watch=None, presence=None,
-    capture_still=None, load_image_from_file=None,
+    image_library=None, capture_still=None, load_image_from_file=None, crop_and_save=None,
 ):
     fake_config_module = _ConfigModuleAtTempPath(tag)
     data_dir = os.path.join(_TEMP_DIR, "{}_data".format(tag))
@@ -168,18 +188,20 @@ def start_server(
     grid_config = grid_config or GridConfigManager(fake_config_module)
     wilt_watch = wilt_watch or WiltWatchManager(per_base_settings, data_dir=data_dir)
     presence = presence or FakePresence()
+    image_library = image_library or ImageLibrary(data_dir=os.path.join(data_dir, "library"))
     capture_still = capture_still or (lambda path: True)
     load_image_from_file = load_image_from_file or (lambda path: GrayscaleImage(4, 4, [200] * 16))
+    crop_and_save = crop_and_save or _default_crop_and_save
 
     handler_cls = make_handler(
         wifi_manager, discovery, association, fake_config_module,
-        grid_config, per_base_settings, wilt_watch, presence,
-        capture_still=capture_still, load_image_from_file=load_image_from_file,
+        grid_config, per_base_settings, wilt_watch, presence, image_library,
+        capture_still=capture_still, load_image_from_file=load_image_from_file, crop_and_save=crop_and_save,
     )
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler_cls)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    return server, fake_config_module, grid_config, per_base_settings, wilt_watch, presence
+    return server, fake_config_module, grid_config, per_base_settings, wilt_watch, presence, image_library
 
 
 def get(port, path):
@@ -279,7 +301,7 @@ finally:
 wifi4 = FakeWifiManager(has_creds=False)
 discovery4 = FakeDiscovery()
 association4 = FakeAssociation()
-server4, fake_cfg4, *_, presence4 = start_server(wifi4, discovery4, association4, "t4")
+server4, fake_cfg4, _, _, _, presence4, _ = start_server(wifi4, discovery4, association4, "t4")
 port4 = server4.server_address[1]
 try:
     status, body = post(port4, "/save_wifi", "ssid=&password=x&broker=test.local&port=1883")
@@ -304,7 +326,7 @@ finally:
 wifi4b = FakeWifiManager(has_creds=False)
 discovery4b = FakeDiscovery()
 association4b = FakeAssociation()
-server4b, _, _, _, _, presence4b = start_server(wifi4b, discovery4b, association4b, "t4b")
+server4b, _, _, _, _, presence4b, _ = start_server(wifi4b, discovery4b, association4b, "t4b")
 port4b = server4b.server_address[1]
 try:
     status, body = post(port4b, "/save_wifi", "ssid=MyHomeWifi&password=x&broker=&port=1883")
@@ -319,7 +341,7 @@ finally:
 wifi5 = FakeWifiManager(has_creds=True)
 discovery5 = FakeDiscovery()
 association5 = FakeAssociation()
-server5, _, _, _, _, presence5 = start_server(wifi5, discovery5, association5, "t5")
+server5, _, _, _, _, presence5, _ = start_server(wifi5, discovery5, association5, "t5")
 port5 = server5.server_address[1]
 try:
     status, body = post(port5, "/save_association", "base_ids=A1B2C3,D4E5F6")
@@ -338,7 +360,7 @@ fake_cfg6.save(cfg6)
 wifi6 = FakeWifiManager(has_creds=True)
 discovery6 = FakeDiscovery(bases={"A1B2C3": {"friendly_name": "Tomato Base"}, "D4E5F6": {"friendly_name": "Basil Base"}})
 association6 = FakeAssociation(["A1B2C3", "D4E5F6"])
-server6, fake_cfg6b, grid6, _, _, presence6 = start_server(wifi6, discovery6, association6, "t6")
+server6, fake_cfg6b, grid6, _, _, presence6, _ = start_server(wifi6, discovery6, association6, "t6")
 port6 = server6.server_address[1]
 try:
     status, body = get(port6, "/grid")
@@ -377,7 +399,7 @@ fake_cfg7.save(cfg7)
 wifi7 = FakeWifiManager(has_creds=True)
 discovery7 = FakeDiscovery(bases={"A1B2C3": {"friendly_name": "Tomato Base"}})
 association7 = FakeAssociation(["A1B2C3"])
-server7, fake_cfg7b, _, per_base7, wilt7, presence7 = start_server(wifi7, discovery7, association7, "t7")
+server7, fake_cfg7b, _, per_base7, wilt7, presence7, image_library7 = start_server(wifi7, discovery7, association7, "t7")
 port7 = server7.server_address[1]
 try:
     status, body = get(port7, "/settings")
@@ -419,6 +441,7 @@ try:
     check("capturing a wilt-watch reference once a cell is assigned succeeds", json.loads(body)["success"] is True)
     check("a captured wilt-watch reference clears config_necessary", per_base7.get_settings("A1B2C3")["wilt_watch_config_necessary"] is False)
     check("a captured wilt-watch reference is stored and usable for comparison", wilt7.has_reference("A1B2C3") is True)
+    check("capturing a wilt-watch reference ALSO populates the image library's independent reference slot", image_library7.list_zone("A1B2C3")["reference"] is not None)
 
     # the three new heuristic visual detector toggles (leaf_scorch, powdery_mildew, pest_indicators)
     # go through the exact same route as the pre-existing ones - no special-casing needed
@@ -429,6 +452,118 @@ try:
         check("'{}' is persisted".format(new_metric), per_base7.get_settings("A1B2C3")[new_metric] is True)
 finally:
     server7.shutdown()
+
+# --- image library: GET /library, GET/POST /library/<zone>/..., POST /save_library_settings ---
+fake_cfg8 = _ConfigModuleAtTempPath("t8")
+cfg8 = fake_cfg8.load()
+cfg8["associated_base_ids"] = ["A1B2C3"]
+fake_cfg8.save(cfg8)
+wifi8 = FakeWifiManager(has_creds=True)
+discovery8 = FakeDiscovery(bases={"A1B2C3": {"friendly_name": "Tomato Base"}})
+association8 = FakeAssociation(["A1B2C3"])
+server8, fake_cfg8b, _, per_base8, _, presence8, image_library8 = start_server(wifi8, discovery8, association8, "t8")
+port8 = server8.server_address[1]
+try:
+    status, body = get(port8, "/library")
+    check("GET /library returns 200", status == 200)
+    check("GET /library embeds the associated zone", "Tomato Base" in body)
+
+    status, body = get(port8, "/library/A1B2C3")
+    check("GET /library/<zone> for an associated zone returns 200", status == 200)
+    check("GET /library/<zone> shows the zone's friendly name", "Tomato Base" in body)
+
+    status, body = get(port8, "/library/UNKNOWN_ZONE")
+    check("GET /library/<zone> for a NON-associated zone returns 404 (not a filesystem lookup)", status == 404)
+
+    status, body = get(port8, "/library/A1B2C3/download/current")
+    check("GET download for a slot that doesn't exist yet returns 404", status == 404)
+
+    # --- path-traversal / validation hardening: zone and image_id are validated BEFORE touching the filesystem ---
+    status, body = get(port8, "/library/..%2f..%2f..%2fetc/download/current")
+    check("a path-traversal-shaped zone is rejected (not treated as a filesystem path)", status == 404)
+
+    status, body = get(port8, "/library/A1B2C3/download/saved/..%2f..%2fsomething")
+    check("a path-traversal-shaped saved image_id is rejected (doesn't match the hex-id pattern)", status == 404)
+
+    status, body = get(port8, "/library/A1B2C3/download/not_a_real_kind")
+    check("an unknown download kind returns 404", status == 404)
+
+    # --- capture (no grid cell assigned yet): fails clearly ---
+    status, body = post(port8, "/library/A1B2C3/capture", "")
+    check("POST capture with no assigned grid cell returns 400", status == 400)
+
+    grid8 = GridConfigManager(fake_cfg8b)
+    grid8.set_grid_dimensions(1, 1)
+    grid8.set_cell_assignment(0, 0, "A1B2C3")
+
+    # --- capture now: rotates into current, serves via download, and the SAME URL renders inline (no Content-Disposition) ---
+    status, body = post(port8, "/library/A1B2C3/capture", "")
+    result = json.loads(body)
+    check("POST capture succeeds once a cell is assigned", status == 200 and result["success"] is True)
+    check("the capture response includes the zone's updated state", result["zone"]["current"] is not None)
+
+    req = urllib.request.Request("http://127.0.0.1:{}/library/A1B2C3/download/current".format(port8))
+    with urllib.request.urlopen(req) as resp:
+        check("GET download for current now returns 200", resp.status == 200)
+        check("download response Content-Type is image/jpeg", resp.headers.get("Content-Type") == "image/jpeg")
+        check("download response has NO Content-Disposition header (so <img> previews still render inline)", resp.headers.get("Content-Disposition") is None)
+
+    check("a fresh capture does not yet populate most_recent (nothing to rotate on the first capture)", image_library8.list_zone("A1B2C3")["most_recent"] is None)
+
+    # a second capture rotates current -> most_recent
+    post(port8, "/library/A1B2C3/capture", "")
+    check("a second capture populates most_recent (rotation)", image_library8.list_zone("A1B2C3")["most_recent"] is not None)
+
+    # --- pin/save ---
+    status, body = post(port8, "/library/A1B2C3/save", "source=current")
+    result = json.loads(body)
+    check("POST save (pin) succeeds for a valid source", status == 200 and result["success"] is True)
+    image_id = result["image_id"]
+    check("the pinned image appears in the zone's saved set", image_id in image_library8.list_zone("A1B2C3")["saved"])
+
+    req = urllib.request.Request("http://127.0.0.1:{}/library/A1B2C3/download/saved/{}".format(port8, image_id))
+    with urllib.request.urlopen(req) as resp:
+        check("GET download for a saved/pinned image returns 200", resp.status == 200)
+        check("download response for a saved image is also image/jpeg", resp.headers.get("Content-Type") == "image/jpeg")
+
+    status, body = post(port8, "/library/A1B2C3/save", "source=not_a_real_source")
+    check("POST save with an invalid source returns 400", status == 400)
+
+    # --- per-zone library settings: three-way-parity setting (item 5/10) ---
+    status, body = post(port8, "/save_library_settings", "base_id=A1B2C3&max_saved_images=1&thumbnail_enabled=true")
+    result = json.loads(body)
+    check("POST save_library_settings succeeds", status == 200 and result["success"] is True)
+    check("max_saved_images is persisted", per_base8.get_settings("A1B2C3")["max_saved_images"] == 1)
+    check("thumbnail_passthrough_enabled is persisted", per_base8.get_settings("A1B2C3")["thumbnail_passthrough_enabled"] is True)
+    check("save_library_settings republishes the base's MQTT state", "A1B2C3" in presence8.publish_base_state_calls)
+
+    # cap is now 1, and one image is already pinned - a second pin is blocked, not silently evicting the first
+    status, body = post(port8, "/library/A1B2C3/save", "source=most_recent")
+    check("pinning beyond the (now-lowered) cap returns 400", status == 400)
+    check("the original pinned image is still present (not silently evicted)", image_id in image_library8.list_zone("A1B2C3")["saved"])
+
+    # --- unpin ---
+    status, body = post(port8, "/library/A1B2C3/unpin", "image_id={}".format(image_id))
+    check("POST unpin succeeds", status == 200 and json.loads(body)["success"] is True)
+    check("the image is gone from the saved set", image_id not in image_library8.list_zone("A1B2C3")["saved"])
+
+    status, body = post(port8, "/library/A1B2C3/unpin", "image_id=not-a-real-id")
+    check("POST unpin for an unknown image_id returns 400", status == 400)
+
+    # --- thumbnail passthrough: opted in above, so the NEXT capture should publish one ---
+    presence8.publish_thumbnail_calls.clear()
+    post(port8, "/library/A1B2C3/capture", "")
+    check("a capture publishes an MQTT thumbnail once this zone has opted in", len(presence8.publish_thumbnail_calls) == 1)
+    check("the published thumbnail is for the right zone", presence8.publish_thumbnail_calls[0][0] == "A1B2C3")
+    check("the published thumbnail is non-empty bytes", len(presence8.publish_thumbnail_calls[0][1]) > 0)
+
+    # opting back out stops future captures from publishing a thumbnail
+    post(port8, "/save_library_settings", "base_id=A1B2C3&max_saved_images=10&thumbnail_enabled=false")
+    presence8.publish_thumbnail_calls.clear()
+    post(port8, "/library/A1B2C3/capture", "")
+    check("a capture does NOT publish a thumbnail once opted back out", presence8.publish_thumbnail_calls == [])
+finally:
+    server8.shutdown()
 
 print()
 if failures:

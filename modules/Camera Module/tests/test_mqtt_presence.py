@@ -236,8 +236,25 @@ with tempfile.TemporaryDirectory() as d:
     check("a newly-associated base is subscribed", ("greenthumb/D4E5F6/module/CAM001/command", 1) in fake_client.subscriptions)
     check("a newly-associated base is published online", fake_client.published_to("greenthumb/D4E5F6/module/CAM001/status") == [("greenthumb/D4E5F6/module/CAM001/status", b"online", True, 1)])
 
+    # --- publish_thumbnail: item 10's opt-in downsampled-thumbnail passthrough ---
+    fake_client.published.clear()
+    presence.publish_thumbnail("D4E5F6", b"\xff\xd8fake-jpeg-bytes")
+    thumb_publishes = fake_client.published_to("greenthumb/D4E5F6/module/CAM001/thumbnail")
+    check("publish_thumbnail() publishes to the base's own thumbnail topic", len(thumb_publishes) == 1)
+    check("publish_thumbnail() publishes the raw bytes, not JSON/base64-wrapped", thumb_publishes[0][1] == b"\xff\xd8fake-jpeg-bytes")
+    check("publish_thumbnail() retains the message", thumb_publishes[0][2] is True)
+    check("publish_thumbnail() never touches the global (module-wide) topic tree", fake_client.published_to("greenthumb/camera/CAM001/global/thumbnail") == [])
+
     presence.disconnect()
     check("disconnect() stops the loop and disconnects", fake_client.loop_stopped is True and fake_client.disconnected is True)
+
+    # publish_thumbnail() while disconnected (no client) is a safe no-op, not a crash
+    try:
+        presence.publish_thumbnail("D4E5F6", b"bytes")
+        raised_thumbnail_disconnected = False
+    except Exception:
+        raised_thumbnail_disconnected = True
+    check("publish_thumbnail() while disconnected doesn't raise", raised_thumbnail_disconnected is False)
 
 # --- per-base set_metric(wilt_watch) command wired to wilt_watch.has_reference(): doesn't
 # redundantly re-flag wilt_watch_config_necessary for a base that already has a reference ---

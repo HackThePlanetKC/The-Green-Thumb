@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Green Thumb Camera Module — Library</title>
+  <style>
+    .zone-card { border: 1px solid #ccc; border-radius: 6px; padding: 12px; margin-bottom: 10px; }
+    .zone-card h3 { margin: 0 0 6px 0; }
+    .zone-card .counts { color: #555; font-size: 0.9em; }
+    .missing { color: #999; }
+  </style>
+</head>
+<body>
+  <h1>Library</h1>
+  <p>An overview of captured images across every zone this module monitors. Open a zone to view, download, or pin its images.</p>
+  <div id="zones"></div>
+  <p id="empty-msg" style="display: none;">No zones yet - associate a base first.</p>
+
+  <script>
+    const zones = {{zones_json}};
+    const container = document.getElementById("zones");
+    if (zones.length === 0) {
+      document.getElementById("empty-msg").style.display = "block";
+    }
+    zones.forEach((zone) => {
+      const card = document.createElement("div");
+      card.className = "zone-card";
+
+      const title = document.createElement("h3");
+      const link = document.createElement("a");
+      link.href = "/library/" + encodeURIComponent(zone.base_id);
+      link.textContent = zone.friendly_name;
+      title.appendChild(link);
+      card.appendChild(title);
+
+      const counts = document.createElement("div");
+      counts.className = "counts";
+      const parts = [];
+      parts.push((zone.has_current ? "Current" : "No current") );
+      parts.push((zone.has_most_recent ? "Most Recent" : "No most recent"));
+      parts.push((zone.has_reference ? "Reference" : "No reference"));
+      parts.push(zone.saved_count + " saved");
+      counts.textContent = parts.join(" · ");
+      card.appendChild(counts);
+
+      container.appendChild(card);
+    });
+  </script>
+</body>
+</html>

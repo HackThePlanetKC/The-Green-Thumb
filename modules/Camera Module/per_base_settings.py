@@ -24,6 +24,15 @@ single-frame visual detectors (see each file of the same name, and
 detector_common.py) - independent of wilt_watch/drama_level, which
 compare against a reference or previous capture instead of analyzing
 one frame in isolation.
+
+Two more per-zone settings live in the same per-base_id entry, but
+are NOT boolean METRICS toggles and have their own setters instead of
+going through set_metric() - see image_library.py:
+- max_saved_images: an integer cap, not a bool.
+- thumbnail_passthrough_enabled: a bool, but a data-passthrough
+  preference rather than a detection/comparison opt-in, so grouping it
+  with METRICS (which set_metric()'s validation is specifically shaped
+  around) would blur what "an independent opt-in metric" means here.
 """
 
 METRICS = (
@@ -47,7 +56,19 @@ _DEFAULT_ENTRY = {
     # re-enables wilt_watch without ever having captured a reference
     # is correctly flagged again without extra bookkeeping.
     "wilt_watch_config_necessary": False,
+    # Per-zone cap on pinned/saved library images (image_library.py) -
+    # 10 is a sane starting default (a small handful of "keepers" per
+    # zone), not sourced from any storage-capacity calculation; tune
+    # per-install once real image sizes/SD card capacity are known.
+    "max_saved_images": 10,
+    # Per-zone opt-in: pass a downsampled thumbnail of the Current
+    # image to HA over MQTT (image_library.py, mqtt_presence.py) - off
+    # by default, since it's optional data passthrough, not a required
+    # part of the module's core function.
+    "thumbnail_passthrough_enabled": False,
 }
+
+_MAX_SAVED_IMAGES_LIMIT = 100
 
 
 class PerBaseSettingsManager:
@@ -59,9 +80,23 @@ class PerBaseSettingsManager:
         Returns this base's current settings, general_health always
         included as a constant True (see module docstring - not
         stored, not toggleable).
+
+        Merges onto _DEFAULT_ENTRY rather than only falling back to it
+        when base_id is entirely absent - an existing-but-PARTIAL
+        stored entry (e.g. one saved by an older version of this
+        module, before a key like max_saved_images/
+        thumbnail_passthrough_enabled existed) must still report every
+        current key with a sane default, not KeyError or silently omit
+        it. set_metric()/set_max_saved_images()/etc. already backfill
+        missing keys into what they persist, but a base_id that's
+        never been touched by any of those since upgrading otherwise
+        wouldn't see this method's own fallback apply per-key - a real
+        gap caught by test_per_base_settings.py's own "legacy entry"
+        test.
         """
         cfg = self._config_module.load()
-        entry = cfg.get("per_base_settings", {}).get(base_id, _DEFAULT_ENTRY)
+        entry = dict(_DEFAULT_ENTRY)
+        entry.update(cfg.get("per_base_settings", {}).get(base_id, {}))
         result = {"general_health": True}
         result.update(entry)
         return result
@@ -114,4 +149,35 @@ class PerBaseSettingsManager:
         per_base = cfg.setdefault("per_base_settings", {})
         entry = per_base.setdefault(base_id, dict(_DEFAULT_ENTRY))
         entry["wilt_watch_config_necessary"] = False
+        self._config_module.save(cfg)
+
+    def set_max_saved_images(self, base_id, value):
+        """
+        Sets this base's own cap on pinned/saved library images
+        (image_library.py). Bounded to a sane range (1-100) - zero
+        would make "pin an image" always fail, and an unbounded value
+        risks filling the Pi's SD card with nothing stopping it; both
+        rejected with a clear ValueError rather than silently clamped,
+        same "fail loudly on a malformed request" posture as
+        set_metric().
+        """
+        if not isinstance(value, int) or isinstance(value, bool) or not (1 <= value <= _MAX_SAVED_IMAGES_LIMIT):
+            raise ValueError("max_saved_images must be an integer between 1 and {}".format(_MAX_SAVED_IMAGES_LIMIT))
+
+        cfg = self._config_module.load()
+        per_base = cfg.setdefault("per_base_settings", {})
+        entry = per_base.setdefault(base_id, dict(_DEFAULT_ENTRY))
+        for key, default_value in _DEFAULT_ENTRY.items():
+            entry.setdefault(key, default_value)
+        entry["max_saved_images"] = value
+        self._config_module.save(cfg)
+
+    def set_thumbnail_passthrough_enabled(self, base_id, enabled):
+        """Toggles this base's own MQTT thumbnail passthrough opt-in (item 10) - see image_library.py/mqtt_presence.py."""
+        cfg = self._config_module.load()
+        per_base = cfg.setdefault("per_base_settings", {})
+        entry = per_base.setdefault(base_id, dict(_DEFAULT_ENTRY))
+        for key, default_value in _DEFAULT_ENTRY.items():
+            entry.setdefault(key, default_value)
+        entry["thumbnail_passthrough_enabled"] = bool(enabled)
         self._config_module.save(cfg)

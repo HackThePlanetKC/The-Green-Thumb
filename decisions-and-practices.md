@@ -109,3 +109,39 @@ values for a base's other sensors (moisture, light, etc.), never
 auto-applied, always requiring explicit user confirmation before a
 real threshold changes. Writing this down now, before either exists,
 so the boundary doesn't blur once both are being built.
+
+## 2026-09-23 — Image library storage kept fully independent of wilt-watch/drama-level
+
+The image library task (local photo storage/retention, portal library
+pages, HA thumbnail passthrough - `modules/Camera Module/
+image_library.py`) raised a real design ambiguity before any code was
+written: wilt-watch and drama-level already persist their own images
+per base (`wilt_reference_<base_id>.json`, `drama_previous_<base_id>.json`
+- grayscale, cropped, stored for structural-comparison math only, see
+`image_compare.py`). The new library's "Most Recent" slot is described
+in plain language as "the same image already used internally for
+drama-level's rolling comparison" - which reads like it should share
+storage with drama-level's own "previous capture" file rather than
+duplicate it.
+
+Asked the user directly rather than guessing, since either answer would
+require touching two already-shipped, merged, tested modules
+(`wilt_watch.py`, `drama_level.py`) if the shared-storage reading was
+correct. **Answer: keep those modules completely unchanged - no
+refactor, no touching their persistence format.** `image_library.py`
+is a fully independent storage system with its own real (full-color)
+JPEG files and its own metadata index. Both systems read from the same
+original capture at the moment it's taken, then each persists its own
+representation for its own consumer - wilt-watch/drama-level for their
+own grayscale structural-diff math, the library for a human
+viewing/downloading a real photo. `image_library.py` never reads or
+writes wilt-watch's/drama-level's files, and they never read or write
+the library's.
+
+**Practice this reinforces:** when a task description's plain-language
+summary of "reuse this" or "the same image already used for X" would,
+if taken literally, require refactoring an already-shipped, tested
+module outside the current task's stated scope, ask before assuming
+that's what's wanted - a wrong guess here would have meant reopening
+and re-testing two modules that were previously reviewed and merged
+under a different task, for no benefit the user actually asked for.

@@ -31,17 +31,30 @@ decisions-and-practices.md for why that side isn't built here).
 import html
 import json
 import os
+import re
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs
 
 from camera_capture import capture_still as _real_capture_still
 from image_compare import load_grayscale_from_file as _real_load_image_from_file
+from image_library import crop_and_save as _real_crop_and_save
 from visual_disclaimers import FULL_DISCLAIMER
 
 _STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 _DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 _GRID_REFERENCE_PATH = os.path.join(_DATA_DIR, "grid_reference.jpg")
 _WILT_CAPTURE_TMP_PATH = os.path.join(_DATA_DIR, "wilt_capture_tmp.jpg")
+_LIBRARY_CAPTURE_TMP_PATH = os.path.join(_DATA_DIR, "library_capture_tmp.jpg")
+_LIBRARY_CROP_TMP_PATH = os.path.join(_DATA_DIR, "library_crop_tmp.jpg")
+
+# Strict validation for anything that becomes part of a filesystem path
+# under image_library.py's data dir - a zone must be one of this
+# module's actual associated bases (never an arbitrary string reaching
+# os.path.join(), which could otherwise be used for path traversal -
+# e.g. "../../etc"), and a saved-image id must look like the
+# uuid4().hex[:12] format image_library.py itself generates.
+_VALID_IMAGE_ID_RE = re.compile(r"^[0-9a-f]{1,32}$")
+_WORKING_KINDS = ("current", "most_recent", "reference")
 
 
 def _safe_json_for_script(data):
@@ -69,8 +82,9 @@ def _render(template_name, **replacements):
 
 def make_handler(
     wifi_manager, discovery, association, config_module,
-    grid_config, per_base_settings, wilt_watch, presence,
+    grid_config, per_base_settings, wilt_watch, presence, image_library,
     capture_still=_real_capture_still, load_image_from_file=_real_load_image_from_file,
+    crop_and_save=_real_crop_and_save,
 ):
     """
     Returns a BaseHTTPRequestHandler subclass closed over its
@@ -95,10 +109,11 @@ def make_handler(
     meantime. Fixed by dropping the shared dict entirely in favor of
     one consistent load-mutate-save pattern everywhere.
 
-    capture_still/load_image_from_file are injected specifically so
-    tests never need a real camera or Pillow installed - see
-    camera_capture.py and image_compare.py's own module docstrings for
-    why each is guarded/injectable in the first place.
+    capture_still/load_image_from_file/crop_and_save are injected
+    specifically so tests never need a real camera or Pillow installed
+    - see camera_capture.py, image_compare.py, and image_library.py's
+    own module docstrings for why each is guarded/injectable in the
+    first place.
     """
 
     class PortalHandler(BaseHTTPRequestHandler):
@@ -120,6 +135,10 @@ def make_handler(
                 self._send_json({"bases": self._associated_bases_with_names()})
             elif self.path == "/api/grid/reference.jpg":
                 self._send_grid_reference()
+            elif self.path == "/library":
+                self._send_html(self._render_library())
+            elif self.path.startswith("/library/"):
+                self._route_library_get()
             else:
                 self.send_error(404)
 
@@ -143,14 +162,20 @@ def make_handler(
                 "/save_grid": self._handle_save_grid,
                 "/save_global_settings": self._handle_save_global_settings,
                 "/save_per_base_metric": self._handle_save_per_base_metric,
+                "/save_library_settings": self._handle_save_library_settings,
                 "/api/grid/capture_reference": self._handle_capture_grid_reference,
                 "/api/wilt_watch/capture_reference": self._handle_capture_wilt_reference,
             }
             handler = handlers.get(self.path)
-            if handler is None:
-                self.send_error(404)
+            if handler is not None:
+                handler(fields)
                 return
-            handler(fields)
+
+            if self.path.startswith("/library/"):
+                self._route_library_post(fields)
+                return
+
+            self.send_error(404)
 
         def _handle_save_wifi(self, fields):
             """
@@ -284,7 +309,13 @@ def make_handler(
             Captures a fresh still, crops it to base_id's assigned
             grid cell(s), and stores that crop as base_id's wilt-watch
             reference (item 9) - clearing wilt_watch_config_necessary
-            (see wilt_watch.capture_reference).
+            (see wilt_watch.capture_reference). Also saves an
+            independent real-color copy of the same crop into the
+            image library's "reference" working slot (image_library.py)
+            - the two are deliberately separate files/formats (grayscale
+            comparison data vs. a real viewable/downloadable photo),
+            populated from the same source frame but never sharing
+            storage - see decisions-and-practices.md.
             """
             base_id = fields.get("base_id", "")
             if not base_id:
@@ -304,8 +335,173 @@ def make_handler(
 
             cropped = full_image.crop(*bbox)
             wilt_watch.capture_reference(base_id, cropped)
+
+            crop_and_save(_WILT_CAPTURE_TMP_PATH, bbox, _LIBRARY_CROP_TMP_PATH)
+            image_library.record_reference(base_id, _LIBRARY_CROP_TMP_PATH)
+
             presence.publish_base_state(base_id)
             self._send_json({"success": True})
+
+        # --- image library (grid/settings task's own capture routes stay
+        # above; these are all new) ---
+
+        def _route_library_get(self):
+            """
+            Parses "/library/<zone>[/download/<kind>[/<image_id>]]" -
+            the only GET shapes under this prefix. zone/kind/image_id
+            are all validated before ever touching the filesystem (see
+            _valid_zone()/module-level _VALID_IMAGE_ID_RE) - image_id
+            in particular must look like the uuid hex image_library.py
+            itself generates, never an arbitrary path-traversal string.
+            """
+            parts = self.path[len("/library/"):].split("/")
+            zone = parts[0]
+            if not self._valid_zone(zone):
+                self.send_error(404)
+                return
+
+            if len(parts) == 1:
+                self._send_html(self._render_zone_images(zone))
+                return
+
+            if len(parts) == 3 and parts[1] == "download" and parts[2] in _WORKING_KINDS:
+                self._send_library_image(zone, parts[2])
+                return
+
+            if len(parts) == 4 and parts[1] == "download" and parts[2] == "saved" and _VALID_IMAGE_ID_RE.match(parts[3]):
+                self._send_library_image(zone, "saved", image_id=parts[3])
+                return
+
+            self.send_error(404)
+
+        def _route_library_post(self, fields):
+            """Parses "/library/<zone>/(capture|save|unpin)" - the only POST shapes under this prefix."""
+            parts = self.path[len("/library/"):].split("/")
+            if len(parts) != 2:
+                self.send_error(404)
+                return
+            zone, action = parts
+            if not self._valid_zone(zone):
+                self.send_error(404)
+                return
+
+            if action == "capture":
+                self._handle_library_capture(zone)
+            elif action == "save":
+                self._handle_library_save(zone, fields)
+            elif action == "unpin":
+                self._handle_library_unpin(zone, fields)
+            else:
+                self.send_error(404)
+
+        def _valid_zone(self, zone):
+            return bool(zone) and zone in association.associated_base_ids()
+
+        def _handle_library_capture(self, zone):
+            """
+            Manual "capture now" - mirrors the existing grid-reference/
+            wilt-watch-reference capture buttons (item 1's Current/Most
+            Recent need SOME way to get a first image in, and no
+            capture scheduler exists yet - see README.md "Remaining").
+            Captures a fresh still, crops it to this zone's assigned
+            cell(s), and rotates it into the library's Current/Most
+            Recent slots (image_library.record_capture) - then, if this
+            zone has opted in, publishes a downsampled thumbnail to HA
+            (item 10).
+            """
+            os.makedirs(_DATA_DIR, exist_ok=True)
+            if not capture_still(_LIBRARY_CAPTURE_TMP_PATH):
+                self._send_json({"success": False, "error": "capture failed - is the camera connected?"}, status=500)
+                return
+
+            full_image = load_image_from_file(_LIBRARY_CAPTURE_TMP_PATH)
+            bbox = grid_config.cell_pixel_bbox(zone, full_image.width, full_image.height)
+            if bbox is None:
+                self._send_json({"success": False, "error": "{} has no assigned grid cell(s) yet".format(zone)}, status=400)
+                return
+
+            crop_and_save(_LIBRARY_CAPTURE_TMP_PATH, bbox, _LIBRARY_CROP_TMP_PATH)
+            image_library.record_capture(zone, _LIBRARY_CROP_TMP_PATH)
+
+            settings = per_base_settings.get_settings(zone)
+            if settings["thumbnail_passthrough_enabled"]:
+                current = config_module.load()
+                max_dimension = current["image_library"]["thumbnail_max_dimension"]
+                thumbnail = image_library.thumbnail_bytes(zone, "current", max_dimension=max_dimension)
+                if thumbnail is not None:
+                    presence.publish_thumbnail(zone, thumbnail)
+
+            self._send_json({"success": True, "zone": image_library.list_zone(zone)})
+
+        def _handle_library_save(self, zone, fields):
+            """Pins a copy of one of zone's working slots (item 2/9) - see image_library.save_image() for the cap-enforcement contract (blocks, never silently evicts, item 3)."""
+            source = fields.get("source", "")
+            if source not in _WORKING_KINDS:
+                self._send_json({"success": False, "error": "source must be one of {}".format(_WORKING_KINDS)}, status=400)
+                return
+
+            max_saved_images = per_base_settings.get_settings(zone)["max_saved_images"]
+            try:
+                image_id = image_library.save_image(zone, source, max_saved_images)
+            except ValueError as e:
+                self._send_json({"success": False, "error": str(e)}, status=400)
+                return
+            self._send_json({"success": True, "image_id": image_id})
+
+        def _handle_library_unpin(self, zone, fields):
+            image_id = fields.get("image_id", "")
+            try:
+                image_library.unpin_image(zone, image_id)
+            except ValueError as e:
+                self._send_json({"success": False, "error": str(e)}, status=400)
+                return
+            self._send_json({"success": True})
+
+        def _handle_save_library_settings(self, fields):
+            """Per-zone image-library settings (item 5/10) - max_saved_images (int) and thumbnail_passthrough_enabled (bool), three-way parity same as _handle_save_per_base_metric."""
+            base_id = fields.get("base_id", "")
+            if not self._valid_zone(base_id):
+                self._send_json({"success": False, "error": "base_id must be an associated base"}, status=400)
+                return
+
+            try:
+                max_saved_images = int(fields.get("max_saved_images", ""))
+            except ValueError:
+                self._send_json({"success": False, "error": "max_saved_images must be a number"}, status=400)
+                return
+
+            try:
+                per_base_settings.set_max_saved_images(base_id, max_saved_images)
+                per_base_settings.set_thumbnail_passthrough_enabled(base_id, fields.get("thumbnail_enabled") == "true")
+            except ValueError as e:
+                self._send_json({"success": False, "error": str(e)}, status=400)
+                return
+
+            presence.publish_base_state(base_id)
+            self._send_json({"success": True, "settings": per_base_settings.get_settings(base_id)})
+
+        def _send_library_image(self, zone, kind, image_id=None):
+            """
+            This is BOTH the <img> preview source AND the download
+            endpoint (item 11) for the same URL - deliberately no
+            Content-Disposition: attachment header, which some browsers
+            honor even for an <img> tag's subresource fetch and would
+            silently break inline previews. The "Download" affordance
+            (item 7/9) is instead the HTML `download` attribute on the
+            template's <a> tags, which forces a save without needing
+            any server-side header - see static/zone_images.html.
+            """
+            path = image_library.image_path(zone, kind, image_id=image_id)
+            if path is None:
+                self.send_error(404)
+                return
+            with open(path, "rb") as f:
+                data = f.read()
+            self.send_response(200)
+            self.send_header("Content-Type", "image/jpeg")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
 
         def _associated_bases_with_names(self):
             bases = discovery.known_bases()
@@ -368,6 +564,36 @@ def make_handler(
                 detector_disclaimer=html.escape(FULL_DISCLAIMER),
             )
 
+        def _render_library(self):
+            """Item 6: an overview across every associated zone - counts, not full images, so this page stays light even with many zones/saved images."""
+            zones = []
+            for base_id, friendly_name in sorted(self._associated_bases_with_names().items()):
+                zone_data = image_library.list_zone(base_id)
+                zones.append({
+                    "base_id": base_id,
+                    "friendly_name": friendly_name,
+                    "has_current": zone_data["current"] is not None,
+                    "has_most_recent": zone_data["most_recent"] is not None,
+                    "has_reference": zone_data["reference"] is not None,
+                    "saved_count": len(zone_data["saved"]),
+                })
+            return _render("library.html", zones_json=_safe_json_for_script(zones))
+
+        def _render_zone_images(self, zone):
+            """Item 7: one zone's Current/Most Recent/Reference/pinned images, with a download link per image and the pin/unpin action (item 9), plus this zone's own library settings (item 5/10)."""
+            zone_data = image_library.list_zone(zone)
+            settings = per_base_settings.get_settings(zone)
+            bases = discovery.known_bases()
+            friendly_name = bases.get(zone, {}).get("friendly_name") or zone
+            return _render(
+                "zone_images.html",
+                zone=html.escape(zone, quote=True),
+                friendly_name=html.escape(friendly_name),
+                zone_json=_safe_json_for_script(zone_data),
+                max_saved_images=str(settings["max_saved_images"]),
+                thumbnail_enabled="true" if settings["thumbnail_passthrough_enabled"] else "false",
+            )
+
         def _send_grid_reference(self):
             if not os.path.exists(_GRID_REFERENCE_PATH):
                 self.send_error(404)
@@ -401,11 +627,11 @@ def make_handler(
 
 def serve_forever(
     wifi_manager, discovery, association, config_module,
-    grid_config, per_base_settings, wilt_watch, presence, port=80,
+    grid_config, per_base_settings, wilt_watch, presence, image_library, port=80,
 ):
     handler_cls = make_handler(
         wifi_manager, discovery, association, config_module,
-        grid_config, per_base_settings, wilt_watch, presence,
+        grid_config, per_base_settings, wilt_watch, presence, image_library,
     )
     server = ThreadingHTTPServer(("0.0.0.0", port), handler_cls)
     server.serve_forever()

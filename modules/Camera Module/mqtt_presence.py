@@ -233,6 +233,32 @@ class CameraMqttPresence:
             payload["detector_disclaimer"] = FULL_DISCLAIMER
             self._publish_json(self._base_topic(base_id, "state"), payload, retain=True)
 
+    def publish_thumbnail(self, base_id, jpeg_bytes):
+        """
+        Publishes a downsampled JPEG thumbnail of base_id's Current
+        image (item 10 - opt-in, see per_base_settings.py's
+        thumbnail_passthrough_enabled and image_library.py's
+        thumbnail_bytes()) to its own topic, RAW bytes - not
+        JSON/base64-wrapped, matching how Home Assistant's own MQTT
+        Camera entity expects an image topic's payload (raw image
+        bytes, content-type implied by convention, not carried in the
+        payload itself). Retained, so a newly-subscribing HA entity
+        sees the last thumbnail immediately rather than "unavailable"
+        until the next capture. Distinct from the full-resolution
+        image, which is deliberately never published over MQTT at all
+        (item 4/11) - HA fetches that on demand from this module's own
+        HTTP download endpoint instead (see web_portal.py, documented
+        in README.md for HA integration purposes).
+
+        Whether/when to call this at all (checking the per-zone opt-in,
+        generating the bytes) is the caller's job (web_portal.py, at
+        capture time) - this method only knows how to publish given
+        bytes, same "storage/decision logic stays out of the MQTT
+        wiring file" split as publish_base_state().
+        """
+        if self._client is not None:
+            self._publish(self._base_topic(base_id, "thumbnail"), jpeg_bytes, retain=True)
+
     def _publish(self, topic, payload, retain=False, qos=1):
         self._client.publish(topic, payload, retain=retain, qos=qos)
 

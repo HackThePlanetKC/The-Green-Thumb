@@ -104,8 +104,33 @@ DEFAULT_CONFIG = {
     #   {"chlorosis": bool, "necrosis": bool, "spotting": bool,
     #    "leaf_scorch": bool, "powdery_mildew": bool,
     #    "pest_indicators": bool, "wilt_watch": bool,
-    #    "drama_level": bool, "wilt_watch_config_necessary": bool}
+    #    "drama_level": bool, "wilt_watch_config_necessary": bool,
+    #    "max_saved_images": int, "thumbnail_passthrough_enabled": bool}
+    # The last two are per-zone image-library settings (see
+    # image_library.py) - unlike the boolean detector/comparison
+    # toggles above, max_saved_images is a numeric cap, but it lives in
+    # this same per-base_id dict rather than a separate top-level key,
+    # for the same reasons: three-way parity (camera portal/that base's
+    # own portal/HA), and a base can only ever edit its own entry.
     "per_base_settings": {},
+    # Image library (see image_library.py): local per-zone photo
+    # storage/retention, independent of wilt_watch.py/drama_level.py's
+    # own separate grayscale-only comparison storage (different
+    # consumers - viewing/downloading a real photo vs. structural
+    # comparison math - deliberately NOT unified into one file per the
+    # decision recorded in decisions-and-practices.md).
+    "image_library": {
+        # Longest-side pixel dimension for the downsampled thumbnail
+        # optionally passed through to HA over MQTT (item 10) - module-
+        # global, not per-zone (the per-zone setting is only whether
+        # passthrough is ON, see per_base_settings.py's
+        # thumbnail_passthrough_enabled) - same "thresholds are
+        # module-global" convention as detectors.* above, see
+        # decisions-and-practices.md. Small default on purpose - a
+        # thumbnail for an HA dashboard tile, not a full-res image
+        # (that's what the HTTP download endpoint is for).
+        "thumbnail_max_dimension": 320,
+    },
     # Thresholds/sensitivity for the six heuristic visual detectors
     # (chlorosis.py, necrosis.py, spotting.py, leaf_scorch.py,
     # powdery_mildew.py, pest_indicators.py). Module-global, not

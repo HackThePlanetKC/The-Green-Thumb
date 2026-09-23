@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Green Thumb Camera Module — {{friendly_name}}</title>
+  <style>
+    .slot { display: inline-block; margin: 10px 16px 10px 0; vertical-align: top; text-align: center; }
+    .slot img { max-width: 200px; max-height: 200px; display: block; border: 1px solid #ccc; }
+    .slot .caption { font-size: 0.85em; color: #555; max-width: 200px; }
+    .actions a, .actions button { margin-right: 6px; }
+  </style>
+</head>
+<body>
+  <p><a href="/library">&larr; Library</a></p>
+  <h1>{{friendly_name}}</h1>
+
+  <p><button id="capture-btn" type="button">Capture Now</button></p>
+  <p id="capture-status"></p>
+
+  <h2>Working images</h2>
+  <div id="working"></div>
+
+  <h2>Saved images</h2>
+  <div id="saved"></div>
+  <p id="no-saved" style="display: none;">No saved images yet - pin a working image above to keep it.</p>
+  <p id="save-status"></p>
+
+  <h2>Zone settings</h2>
+  <form id="settings-form">
+    <label>Max saved images
+      <input type="number" id="max_saved_images" name="max_saved_images" min="1" max="100" value="{{max_saved_images}}">
+    </label>
+    <label>
+      <input type="checkbox" id="thumbnail_enabled" name="thumbnail_enabled">
+      Pass a thumbnail of Current to Home Assistant over MQTT
+    </label>
+    <button type="submit">Save Zone Settings</button>
+  </form>
+  <p id="settings-status"></p>
+
+  <script>
+    const zone = "{{zone}}";
+    let zoneData = {{zone_json}};
+    document.getElementById("thumbnail_enabled").checked = {{thumbnail_enabled}};
+
+    const ROLE_LABELS = { current: "Current", most_recent: "Most Recent", reference: "Reference" };
+
+    function downloadUrl(kind, imageId) {
+      const base = "/library/" + encodeURIComponent(zone) + "/download/";
+      return kind === "saved" ? base + "saved/" + encodeURIComponent(imageId) : base + kind;
+    }
+
+    async function pinImage(source) {
+      const statusEl = document.getElementById("save-status");
+      const params = new URLSearchParams();
+      params.append("source", source);
+      try {
+        const resp = await fetch("/library/" + encodeURIComponent(zone) + "/save", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: params.toString(),
+        });
+        const result = await resp.json();
+        if (result.success) {
+          statusEl.textContent = "Pinned.";
+          await refresh();
+        } else {
+          statusEl.textContent = "Error: " + (result.error || "unknown error");
+        }
+      } catch (e) {
+        statusEl.textContent = "Request failed - is the module reachable?";
+      }
+    }
+
+    async function unpinImage(imageId) {
+      const statusEl = document.getElementById("save-status");
+      const params = new URLSearchParams();
+      params.append("image_id", imageId);
+      try {
+        const resp = await fetch("/library/" + encodeURIComponent(zone) + "/unpin", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: params.toString(),
+        });
+        const result = await resp.json();
+        if (result.success) {
+          statusEl.textContent = "Unpinned.";
+          await refresh();
+        } else {
+          statusEl.textContent = "Error: " + (result.error || "unknown error");
+        }
+      } catch (e) {
+        statusEl.textContent = "Request failed - is the module reachable?";
+      }
+    }
+
+    function renderWorking() {
+      const container = document.getElementById("working");
+      container.innerHTML = "";
+      ["current", "most_recent", "reference"].forEach((role) => {
+        const meta = zoneData[role];
+        const slot = document.createElement("div");
+        slot.className = "slot";
+
+        const caption = document.createElement("div");
+        caption.className = "caption";
+        caption.textContent = ROLE_LABELS[role] + (meta ? " - " + meta.captured_at : " - none yet");
+        slot.appendChild(caption);
+
+        if (meta) {
+          const img = document.createElement("img");
+          img.src = downloadUrl(role) + "?t=" + Date.now();
+          slot.appendChild(img);
+
+          const actions = document.createElement("div");
+          actions.className = "actions";
+          const dl = document.createElement("a");
+          dl.href = downloadUrl(role);
+          dl.download = zone + "_" + role + ".jpg";
+          dl.textContent = "Download";
+          actions.appendChild(dl);
+
+          const pinBtn = document.createElement("button");
+          pinBtn.type = "button";
+          pinBtn.textContent = "Pin";
+          pinBtn.addEventListener("click", () => pinImage(role));
+          actions.appendChild(pinBtn);
+
+          slot.appendChild(actions);
+        }
+        container.appendChild(slot);
+      });
+    }
+
+    function renderSaved() {
+      const container = document.getElementById("saved");
+      container.innerHTML = "";
+      const entries = Object.entries(zoneData.saved || {});
+      document.getElementById("no-saved").style.display = entries.length === 0 ? "block" : "none";
+      entries.forEach(([imageId, meta]) => {
+        const slot = document.createElement("div");
+        slot.className = "slot";
+
+        const caption = document.createElement("div");
+        caption.className = "caption";
+        caption.textContent = "Pinned " + meta.pinned_at + " (from " + ROLE_LABELS[meta.source] + ")";
+        slot.appendChild(caption);
+
+        const img = document.createElement("img");
+        img.src = downloadUrl("saved", imageId);
+        slot.appendChild(img);
+
+        const actions = document.createElement("div");
+        actions.className = "actions";
+        const dl = document.createElement("a");
+        dl.href = downloadUrl("saved", imageId);
+        dl.download = zone + "_" + imageId + ".jpg";
+        dl.textContent = "Download";
+        actions.appendChild(dl);
+
+        const unpinBtn = document.createElement("button");
+        unpinBtn.type = "button";
+        unpinBtn.textContent = "Unpin";
+        unpinBtn.addEventListener("click", () => unpinImage(imageId));
+        actions.appendChild(unpinBtn);
+
+        slot.appendChild(actions);
+        container.appendChild(slot);
+      });
+    }
+
+    async function refresh() {
+      // No separate JSON API for zone state - re-fetching the HTML page
+      // and re-parsing it would be more code for no benefit, so just
+      // reload; this page has no unsaved local state to preserve.
+      window.location.reload();
+    }
+
+    document.getElementById("capture-btn").addEventListener("click", async () => {
+      const statusEl = document.getElementById("capture-status");
+      statusEl.textContent = "Capturing...";
+      try {
+        const resp = await fetch("/library/" + encodeURIComponent(zone) + "/capture", { method: "POST" });
+        const result = await resp.json();
+        if (result.success) {
+          statusEl.textContent = "Captured.";
+          zoneData = result.zone;
+          renderWorking();
+        } else {
+          statusEl.textContent = "Error: " + (result.error || "capture failed");
+        }
+      } catch (e) {
+        statusEl.textContent = "Request failed - is the module reachable?";
+      }
+    });
+
+    document.getElementById("settings-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const params = new URLSearchParams();
+      params.append("base_id", zone);
+      params.append("max_saved_images", document.getElementById("max_saved_images").value);
+      params.append("thumbnail_enabled", document.getElementById("thumbnail_enabled").checked ? "true" : "false");
+
+      const statusEl = document.getElementById("settings-status");
+      try {
+        const resp = await fetch("/save_library_settings", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: params.toString(),
+        });
+        const result = await resp.json();
+        statusEl.textContent = result.success ? "Saved." : "Error: " + (result.error || "unknown error");
+      } catch (e) {
+        statusEl.textContent = "Request failed - is the module reachable?";
+      }
+    });
+
+    renderWorking();
+    renderSaved();
+  </script>
+</body>
+</html>

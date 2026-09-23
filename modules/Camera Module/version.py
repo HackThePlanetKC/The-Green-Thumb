@@ -50,6 +50,29 @@ existing topic/config contract changed for anything that already
 existed, so another MINOR bump. Capture scheduling still doesn't
 exist, so none of these detectors are wired into a live capture loop
 yet - see this module's README.md for current status.
+
+0.5.0: added the local image library (image_library.py) - per-zone
+(associated base_id) real JPEG storage/retention with three rotating
+working slots (current/most_recent/reference) and an independent,
+user-pinned, per-zone-capped saved set; portal library pages
+(static/library.html, static/zone_images.html - overview + per-zone
+Current/Most Recent/Reference/pinned images with download and pin/
+unpin actions); an opt-in downsampled-thumbnail passthrough to HA over
+MQTT (greenthumb/<base_id>/module/<camera_id>/thumbnail, raw JPEG
+bytes) with the resolution set by config.py's new module-global
+image_library.thumbnail_max_dimension; and a local HTTP download
+endpoint (GET /library/<zone>/download/<kind>[/<image_id>]) for HA or
+any local consumer to fetch a full-resolution image on demand.
+Deliberately independent storage from wilt_watch.py/drama_level.py,
+which keep their own separate grayscale comparison images unchanged -
+see decisions-and-practices.md. Two new per-base settings
+(per_base_settings.py: max_saved_images, thumbnail_passthrough_enabled)
+with their own setters, not part of the existing METRICS toggle set.
+All additive - no existing topic/config contract changed for anything
+that already existed, so another MINOR bump. Capture into the library
+is manual (a Capture Now button, same as the existing grid/wilt-watch
+reference captures) since capture scheduling still doesn't exist - see
+this module's README.md for current status.
 """
 
-VERSION = "0.4.0"
+VERSION = "0.5.0"
