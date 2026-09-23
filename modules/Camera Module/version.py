@@ -11,10 +11,17 @@ this module's MQTT contract/config schema, MINOR for new features,
 PATCH for fixes), bumped manually by whoever changes the code.
 
 0.1.0 as the starting point: only the RGBW pre-capture flash subsystem
-exists so far (ring driver, flash trigger logic, config) - capture
+existed (ring driver, flash trigger logic, config) - capture
 scheduling, the light sensor driver it reads from, and MQTT
-discovery/publishing don't exist yet. See this module's README.md for
-current status.
+discovery/publishing didn't exist yet.
+
+0.2.0: added WiFi setup (nmcli-based, mirroring core/wifi.py's API
+shape) and MQTT base discovery/association (subscribes to
+greenthumb/+/device_info, lets the user pick which base(s) this module
+monitors) - both additive, no existing contract changed, so a MINOR
+bump. Capture scheduling, grid/settings UI, and the module's own
+top-level MQTT/HA presence still don't exist yet - see this module's
+README.md for current status.
 """
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"

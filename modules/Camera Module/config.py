@@ -38,6 +38,34 @@ DEFAULT_CONFIG = {
         # hardware entirely), see ring.py.
         "brightness": 0.5,
     },
+    "wifi": {
+        # Same shape as the base station's own core/config.py wifi
+        # dict, for consistency - and stored the same way it is there:
+        # plain JSON, no encryption. That's not a new gap introduced
+        # here, it's the existing project-wide approach (see
+        # wifi_manager.py's module docstring) - the base station's own
+        # WiFi password sits in its config.json the same way.
+        "ssid": "",
+        "password": "",
+    },
+    "mqtt": {
+        # Broker address/port are user-entered - no auto-discovery
+        # mechanism exists anywhere in this project (the base
+        # station's own settings page requires manual broker entry
+        # too, see web/server.py's _handle_settings_mqtt in the base
+        # firmware repo). Bundled into this module's WiFi setup step
+        # specifically because base discovery (this module's very next
+        # setup step, see mqtt_discovery.py) needs a broker connection
+        # to work at all - unlike the base station, which can defer
+        # broker configuration to a settings page it reaches over a
+        # network connection it already has by then.
+        "broker": "",
+        "port": 1883,
+    },
+    # List of base_id strings (never friendly_name - see
+    # base_association.py for why) this camera module is associated
+    # with. Empty until the user completes the association step.
+    "associated_base_ids": [],
 }
 
 

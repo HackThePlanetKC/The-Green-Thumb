@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Green Thumb Camera Module — Associate Bases</title>
+</head>
+<body>
+  <h1>Associate Bases</h1>
+  <p>Choose which Green Thumb base station(s) this camera module should monitor. A base only appears here once it's been seen online at least once (its retained MQTT identity is what this list is built from) - if you don't see a base you expect, make sure it's connected to MQTT and try reloading this page.</p>
+  <form id="associate-form">
+    {{rows}}
+    <button type="submit">Save</button>
+  </form>
+  <p id="status"></p>
+
+  <script>
+    document.getElementById("associate-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const checked = Array.from(document.querySelectorAll('input[name="base_ids"]:checked')).map(el => el.value);
+      const statusEl = document.getElementById("status");
+      try {
+        const resp = await fetch("/save_association", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: "base_ids=" + encodeURIComponent(checked.join(",")),
+        });
+        const result = await resp.json();
+        statusEl.textContent = result.success ? "Saved." : "Error saving.";
+      } catch (e) {
+        statusEl.textContent = "Request failed - is the module reachable?";
+      }
+    });
+  </script>
+</body>
+</html>

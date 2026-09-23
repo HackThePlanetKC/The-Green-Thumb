@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Green Thumb Camera Module Setup</title>
+</head>
+<body>
+  <h1>Camera Module Setup</h1>
+  <p>Enter your WiFi network details and MQTT broker address to connect this module to your home network.</p>
+
+  <form id="wifi-form">
+    <label>Network Name (SSID)
+      <input type="text" id="ssid" name="ssid" list="network-list" required autocomplete="off">
+    </label>
+    <datalist id="network-list"></datalist>
+    <label>Password
+      <input type="password" id="password" name="password" autocomplete="off">
+    </label>
+    <label>MQTT Broker Address
+      <input type="text" id="broker" name="broker" placeholder="e.g. 192.168.1.10 or homeassistant.local" required>
+    </label>
+    <label>MQTT Broker Port
+      <input type="number" id="port" name="port" value="1883">
+    </label>
+    <button type="submit">Connect</button>
+  </form>
+  <p id="status"></p>
+
+  <script>
+    async function loadNetworks() {
+      try {
+        const resp = await fetch("/api/scan");
+        const data = await resp.json();
+        const list = document.getElementById("network-list");
+        list.innerHTML = "";
+        (data.networks || []).forEach(ssid => {
+          const opt = document.createElement("option");
+          opt.value = ssid;
+          list.appendChild(opt);
+        });
+      } catch (e) { /* scan failed - manual entry still works */ }
+    }
+
+    document.getElementById("wifi-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const params = new URLSearchParams();
+      params.append("ssid", document.getElementById("ssid").value);
+      params.append("password", document.getElementById("password").value);
+      params.append("broker", document.getElementById("broker").value);
+      params.append("port", document.getElementById("port").value);
+
+      const statusEl = document.getElementById("status");
+      statusEl.textContent = "Connecting...";
+      try {
+        const resp = await fetch("/save_wifi", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: params.toString(),
+        });
+        const result = await resp.json();
+        if (result.success && result.connected && result.discovery_started) {
+          statusEl.textContent = "Connected! Reconnect to your normal WiFi, then visit this module's new IP to choose which base(s) to monitor.";
+        } else if (result.success && result.connected) {
+          statusEl.textContent = "Connected to WiFi, but could not reach the MQTT broker - check the address/port and try again.";
+        } else if (result.success) {
+          statusEl.textContent = "Saved, but could not connect to WiFi - check the password and try again.";
+        } else {
+          statusEl.textContent = "Error: " + (result.error || "unknown error");
+        }
+      } catch (e) {
+        statusEl.textContent = "Request failed - is the module reachable?";
+      }
+    });
+
+    loadNetworks();
+  </script>
+</body>
+</html>

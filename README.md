@@ -128,7 +128,7 @@ Each paired module stays associated with the specific base it's connected to —
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full technical contract (exact JSON shape, the multi-base-station design notes, and what the future HACS integration needs to do to group modules under their base in Home Assistant).
 
-**Not every module is BLE-paired like the above.** [`modules/`](modules/) also holds standalone modules that run their own OS/platform and speak MQTT directly rather than relaying through a base - the first is the **Camera Module** (`modules/Camera Module/`), a Pi-based visual health monitor with a WS2812B RGBW fill flash. Early scaffolding only (the flash subsystem, not capture/MQTT yet) - see [its README](modules/Camera%20Module/README.md).
+**Not every module is BLE-paired like the above.** [`modules/`](modules/) also holds standalone modules that run their own OS/platform and speak MQTT directly rather than relaying through a base - the first is the **Camera Module** (`modules/Camera Module/`), a Pi-based visual health monitor with a WS2812B RGBW fill flash. The flash subsystem, WiFi setup, and MQTT base discovery/association are built; capture scheduling, grid/settings, and its own top-level MQTT/HA presence aren't yet - see [its README](modules/Camera%20Module/README.md).
 
 ## Design principles
 
