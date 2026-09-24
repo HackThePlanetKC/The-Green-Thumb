@@ -145,3 +145,55 @@ module outside the current task's stated scope, ask before assuming
 that's what's wanted - a wrong guess here would have meant reopening
 and re-testing two modules that were previously reviewed and merged
 under a different task, for no benefit the user actually asked for.
+
+## 2026-09-24 — Community-sourced houseplant image dataset: documented, deferred
+
+Captured as a future-enhancement idea in `docs/ARCHITECTURE.md`'s
+"Future Enhancements" section, rather than implemented. Note-only, by
+request - no code, no version bump.
+
+The idea: an opt-in, per-install upload path to a central Green
+Thumb-run collection endpoint, building toward an open, publicly-
+released houseplant image dataset sorted by species - a PlantVillage-
+style resource for common houseplants, which PlantVillage does not
+cover - to support future classifier training/fine-tuning across the
+system.
+
+**Explicitly system-level, not module-level.** This is project
+infrastructure (central upload endpoint, storage, moderation tooling,
+legal/licensing docs) sitting above any single module's firmware - not
+something to design into the Camera Module or any other module's own
+codebase. Any current or future image-capable module could be a
+source; the collection/moderation infrastructure itself doesn't belong
+to any one of them.
+
+**Depends on the species field existing first.** This note explicitly
+builds on the still-deferred species-based sensor threshold idea
+(recorded 2026-09-23, same Future Enhancements section) - sorting is
+by species only, and an image is only eligible for collection once a
+species is set for that plant/zone. This feature has no reason to
+exist until that one does, and is recorded here specifically to keep
+that dependency visible rather than have someone rediscover it later.
+
+**Species-only, no health labeling** - species identification is
+taken as user-asserted and correct, nothing more; no health/healthy-
+unhealthy labeling is collected or assumed alongside it. Keeping this
+boundary explicit now, before either the species field or this
+dataset feature exists, for the same reason the species-threshold note
+keeps itself explicitly separate from the Camera Module's (not yet
+built) general-health classifier - so a future implementer doesn't
+quietly fold labeling into what's supposed to stay a plain identity
+tag.
+
+**Non-negotiable privacy requirement, recorded now so it can't be
+quietly dropped later:** all EXIF metadata stripped before storage, no
+exceptions - GPS, device serial, timestamps, every field, gone.
+
+**Explicit open questions left for implementation time, not guessed at
+here:** which open-data license (CC-BY, CC-BY-SA, CC0, etc.) and what
+contributor terms are shown at opt-in; the actual moderation tooling
+and how community moderator roles are granted/revoked; automated pre-
+filtering thresholds (blur/quality/plant-presence detection) used
+ahead of manual review.
+
+Status: deferred, not scheduled. Do not implement.

@@ -494,3 +494,17 @@ As of the current camera module work, per-base camera settings (general health/a
 Closing this gap means: base firmware gains an MQTT subscription client-side for relevant module topics it isn't BLE-paired with, plus a new local-portal UI section to render/edit that data. This is base-firmware work (`core/`, `web/server.py`), with its own version bump and testing - separate from any module's `version.py`.
 
 This isn't camera-module-specific - any future standalone WiFi/MQTT module (not just the camera) would hit the same gap. Worth solving generally (a base subscribes to and displays settings for any associated module, regardless of pairing method) rather than one-off per module.
+
+### Community-sourced, species-sorted houseplant image dataset
+
+**Status: deferred, not scheduled. Do not implement.**
+
+The idea: an opt-in, per-install upload path to a central, Green Thumb-run collection endpoint, building toward an open, publicly-released image dataset of common houseplants sorted by species - a PlantVillage-style resource, but for houseplants, which PlantVillage does not cover - to support future classifier training/fine-tuning across the system.
+
+- **System-level, not module-level.** This is project infrastructure (a central upload endpoint, storage, moderation tooling, legal/licensing docs) sitting above any single module's firmware - not something to design into the Camera Module or any other module's own codebase. Any current or future image-capable module could be a source.
+- **Depends on the species field existing first.** Sorting is by species only, and an image is only eligible for collection once a species is set for that plant/zone - see the species-based sensor threshold note above, which is where that field itself is deferred. This feature has no reason to exist until that one does.
+- **Species-only, no health labeling.** Species identification is taken as user-asserted and correct, nothing more - no health/healthy-unhealthy labeling is collected or assumed alongside it.
+- **Prefer a cropped region over a full-frame still where the source shape allows it** (e.g. a camera module's zone crop) - reduces incidental identifying background content by design, and matches the crop a classifier would eventually train/infer on anyway. Not every future source will have this shape, so this is a preference where available, not a hard requirement of the feature itself.
+- **All EXIF metadata stripped before storage, no exceptions** - GPS, device serial, timestamps, and every other EXIF field, all removed, no fields retained. Non-negotiable.
+- **Moderation is community-based**, with trusted admin/moderator roles rather than a single-person bottleneck, reviewing for (a) identifying content accidentally in frame and (b) species-correctness/image validity/quality. Automated pre-filtering (blur/quality detection, a basic "is there a plant present" sanity check) can reduce volume before manual review, but final review needs humans.
+- **Licensing is an open question that must be answered explicitly, not implied.** Needs a chosen open-data license (e.g. CC-BY, CC-BY-SA, CC0) and clear contributor terms shown to the user at opt-in time - not boilerplate, not assumed.
